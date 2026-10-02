@@ -1480,3 +1480,128 @@ def test_a_declared_secret_in_a_reported_setting_is_redacted() -> None:
         sample_key=key(), request=request_(stop=(blind,)), prompt_hash=PROMPT_HASH
     )
     assert blind not in json.dumps(outcome.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the sixth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_complete_honours_a_recorded_failure_the_streaming_path_refuses() -> None:
+    """The two paths must not return opposite verdicts on the same record."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "outcome": "error",
+                "failure_kind": "rate_limit",
+                "error_message": "no tokens were served",
+                "json": chat_payload(),
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "partial"}, "finish_reason": "stop"}]}
+                ],
+            }
+        }
+    )
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    streamed = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert completed.failure is not None
+    assert streamed.failure is not None
+    assert completed.failure.kind == streamed.failure.kind
+    assert completed.result is None and streamed.result is None
+
+
+def test_the_streaming_refusal_keeps_the_reported_unsupported_settings() -> None:
+    """Every refusal branch reports what the endpoint declined, including this one."""
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=False, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "unsupported_settings": ["top_p"],
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(top_p=0.5),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
+    assert "top_p" in [item.setting for item in outcome.unsupported]
+    assert {item.setting: item.requested for item in outcome.unsupported}["top_p"] == 0.5
+
+
+def test_a_boolean_http_status_is_not_read_as_a_status() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": True, "json": chat_payload()}})
+    for outcome in (
+        instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH),
+        instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH),
+    ):
+        if outcome.failure is not None:
+            assert outcome.failure.http_status is None, "a bool is not an HTTP status"
+
+
+def test_a_zero_retry_after_is_read_as_a_value() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": 0},
+                "body": {"error": {"message": "slow down"}},
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.retry_after_seconds == 0.0, "0 is a reported value, not an absence"
+
+
+def test_a_no_fixture_detail_is_redacted_on_the_zen_routes() -> None:
+    blind = "ZZdeclaredEndpointSecret77"
+    instance = adapter(extra_secrets=frozenset({blind}))
+    request = request_()
+    for outcome in (
+        instance.complete(
+            sample_key=key(f"ifeval::{blind}"), request=request, prompt_hash=PROMPT_HASH
+        ),
+        instance.stream(
+            sample_key=key(f"ifeval::{blind}"), request=request, prompt_hash=PROMPT_HASH
+        ),
+    ):
+        assert outcome.failure is not None
+        assert blind not in outcome.failure.detail
+
+
+def test_the_no_frames_refusal_keeps_the_reported_unsupported_settings() -> None:
+    """Every refusal branch reports what the endpoint declined, including this one."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["seed"],
+            }
+        }
+    )
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(seed=3),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
+    assert [item.setting for item in outcome.unsupported] == ["seed"]
+    assert outcome.unsupported[0].requested == 3

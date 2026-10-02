@@ -336,7 +336,7 @@ def check_requested_settings(
         unsupported.append(
             UnsupportedSetting(
                 setting="stream",
-                requested=True,
+                requested=_requested_value(request, "stream"),
                 reason="the endpoint's catalog does not advertise streaming",
             )
         )
@@ -482,7 +482,7 @@ class FixtureTransport(ProviderAdapter):
         and it is reported as empty rather than filled with plausible aliases.
         """
         raw = dict(self.bundle.catalog)
-        models = raw.get("models", raw.get("data", []))
+        models = _catalog_models(raw)
         if not isinstance(models, Sequence) or isinstance(models, (str, bytes)):
             # A malformed catalog is an empty observation, not an exception: discovery
             # must never take the campaign down on one bad fixture.
@@ -538,12 +538,13 @@ class FixtureTransport(ProviderAdapter):
         recorded = self._find(endpoint_id, benchmark_id, item_id, sample_key.repeat_id)
         if recorded is None:
             return AdapterResult(
-                failure=TransportFailure(
-                    kind=FailureKind.NO_FIXTURE,
-                    detail=(
+                failure=safe_failure(
+                    FailureKind.NO_FIXTURE,
+                    (
                         f"no recorded exchange for {endpoint_id}/{benchmark_id}/{item_id} "
                         f"repeat {sample_key.repeat_id}"
                     ),
+                    extra_secrets=self.extra_secrets,
                 )
             )
 
@@ -573,9 +574,7 @@ class FixtureTransport(ProviderAdapter):
                 effective_settings=redact_mapping(
                     dict(recorded.effective_settings), extra_secrets=self.extra_secrets
                 ),
-                streaming=StreamingMeasurements.model_validate(recorded.streaming)
-                if recorded.streaming
-                else None,
+                streaming=_recorded_measurements(recorded.streaming),
                 finish_status=recorded.finish_status,
                 manifest_hash=manifest_hash,
                 redacted_provider_metadata={
@@ -623,9 +622,10 @@ class FixtureTransport(ProviderAdapter):
         recorded = self._find(endpoint_id, benchmark_id, item_id, sample_key.repeat_id)
         if recorded is None:
             return AdapterResult(
-                failure=TransportFailure(
-                    kind=FailureKind.NO_FIXTURE,
-                    detail=f"no recorded stream for {endpoint_id}/{benchmark_id}/{item_id}",
+                failure=safe_failure(
+                    FailureKind.NO_FIXTURE,
+                    f"no recorded stream for {endpoint_id}/{benchmark_id}/{item_id}",
+                    extra_secrets=self.extra_secrets,
                 )
             )
         unsupported = _unsupported_from(recorded, request, extra_secrets=self.extra_secrets)
@@ -683,7 +683,9 @@ class FixtureTransport(ProviderAdapter):
         return AdapterResult(
             result=outcome.result,
             failure=outcome.failure,
-            unsupported=_unsupported_from(recorded, request),
+            # The same redacted tuple every other branch returns; recomputing it here
+            # without the declared secrets leaked them into the artifact.
+            unsupported=unsupported,
             effective_settings=outcome.effective_settings,
         )
 
@@ -719,6 +721,23 @@ def read_terminated(value: Any = _ABSENT) -> bool:
         # An allowlist: an unrecognised spelling is not evidence of completion.
         return value.strip().lower() in _TRUE_WORDS
     return False
+
+
+def _recorded_measurements(
+    recorded: Mapping[str, Any] | None,
+) -> StreamingMeasurements | None:
+    """Timings a capture recorded, or ``None`` when they cannot be true together.
+
+    A capture is data, not code: an incoherent timing line is dropped rather than
+    allowed to abort the dispatch, because one bad field must not take the campaign
+    down. This mirrors what the streaming path already does.
+    """
+    if not recorded:
+        return None
+    try:
+        return StreamingMeasurements.model_validate(recorded)
+    except ValidationError:
+        return None
 
 
 def _redacted_requested(request: ModelRequest, setting: str, extra_secrets: frozenset[str]) -> Any:
@@ -837,6 +856,20 @@ def _route_label(value: Any) -> str:
     ``str(None)`` would label a record ``"None"``, which is worse than no label.
     """
     return value.strip() if isinstance(value, str) and value.strip() else "zen"
+
+
+def _catalog_models(raw: Mapping[str, Any]) -> Sequence[Any]:
+    """The model list a catalog record carries, under either documented key.
+
+    ``data`` wins over ``models`` when both are present, which is the order the
+    gateway normalizer uses. Preferring differently would give the same alias
+    different capabilities depending on which adapter read it.
+    """
+    for key in ("data", "models"):
+        value = raw.get(key)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return value
+    return []
 
 
 def _first_str(item: Mapping[str, Any], *keys: str) -> str | None:

@@ -209,19 +209,22 @@ MUTATIONS = (
         "M17",
         "review-7: recorded unsupported settings are ignored when streaming",
         "src/stealthbench/adapters/base.py",
-        "            unsupported=_unsupported_from(recorded, request),",
-        "            unsupported=(),",
+        (
+            "            unsupported=unsupported,"
+            "\n            effective_settings=outcome.effective_settings,"
+        ),
+        (
+            "            unsupported=_unsupported_from(recorded, request),"
+            "\n            effective_settings=outcome.effective_settings,"
+        ),
         "tests/contract",
     ),
     Mutation(
         "M18",
         "review-8: a malformed catalog raises out of discover()",
         "src/stealthbench/adapters/base.py",
-        """        if not isinstance(models, Sequence) or isinstance(models, (str, bytes)):
-            # A malformed catalog is an empty observation, not an exception: discovery
-            # must never take the campaign down on one bad fixture.
-            models = []""",
-        "        models = list(models)",
+        "        models = _catalog_models(raw)",
+        "        models = list(raw.get('models', raw.get('data', [])))",
         "tests/contract",
     ),
     Mutation(
@@ -349,11 +352,10 @@ MUTATIONS = (
         "review3-2: a terminated capture with no usable frames is accepted again",
         "src/stealthbench/adapters/streaming.py",
         (
-            "        not assembly.saw_content"
-            "\n        and assembly.usage.input_tokens is None"
-            "\n        and assembly.usage.output_tokens is None"
+            "    if not assembly.saw_content"
+            " and not (reported_output is not None and reported_output > 0):"
         ),
-        "        not assembly.saw_content",
+        "    if not assembly.saw_content:",
         "tests/contract",
     ),
     Mutation(
@@ -384,19 +386,28 @@ MUTATIONS = (
         "M35",
         "review3-7: zen recorded unsupported settings are dropped on the stream path",
         "src/stealthbench/adapters/zen.py",
-        "                unsupported=unsupported + recorded_settings,\n            )",
-        "                unsupported=unsupported,\n            )",
+        (
+            '                    "recorded Zen exchange carries no stream frames",\n'
+            "                    extra_secrets=self.extra_secrets,\n"
+            "                ),\n"
+            "                unsupported=unsupported + recorded_settings,"
+        ),
+        (
+            '                    "recorded Zen exchange carries no stream frames",\n'
+            "                    extra_secrets=self.extra_secrets,\n"
+            "                ),"
+        ),
         "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
         "M36",
         "review4-1: an empty usage block counts as content again",
         "src/stealthbench/adapters/streaming.py",
-        """    if (
-        not assembly.saw_content
-        and assembly.usage.input_tokens is None
-        and assembly.usage.output_tokens is None
-    ):""",
+        (
+            "    reported_output = assembly.usage.output_tokens\n"
+            "    if not assembly.saw_content"
+            " and not (reported_output is not None and reported_output > 0):"
+        ),
         "    if not assembly.saw_content:",
         "tests/contract",
     ),
@@ -532,6 +543,110 @@ MUTATIONS = (
         "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
+        "M51",
+        "review6-1 HIGH: the fixture streaming success return leaks a declared secret",
+        "src/stealthbench/adapters/base.py",
+        (
+            "            unsupported=unsupported,"
+            "\n            effective_settings=outcome.effective_settings,"
+        ),
+        (
+            "            unsupported=_unsupported_from(recorded, request),"
+            "\n            effective_settings=outcome.effective_settings,"
+        ),
+        "tests/contract",
+    ),
+    Mutation(
+        "M52",
+        "review6-3: the stream setting report fabricates requested=True again",
+        "src/stealthbench/adapters/base.py",
+        '                requested=_requested_value(request, "stream"),',
+        "                requested=True,",
+        "tests/contract",
+    ),
+    Mutation(
+        "M53",
+        "review6-4: zen complete() ignores a recorded failure outcome",
+        "src/stealthbench/adapters/zen.py",
+        (
+            '        recorded_failure = record.get("outcome") == "error" or isinstance('
+            '\n            record.get("failure_kind"), str\n        )'
+        ),
+        "        recorded_failure = False",
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M54",
+        "review6-5: an incoherent capture timing raises out of complete()",
+        "src/stealthbench/adapters/base.py",
+        (
+            "    try:\n        return StreamingMeasurements.model_validate(recorded)"
+            "\n    except ValidationError:\n        return None"
+        ),
+        "    return StreamingMeasurements.model_validate(recorded)",
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M55",
+        "review6-6: the shared catalog reader prefers models over data",
+        "src/stealthbench/adapters/base.py",
+        '    for key in ("data", "models"):\n        value = raw.get(key)',
+        '    for key in ("models", "data"):\n        value = raw.get(key)',
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M56",
+        "review6-7: a usage block reporting no produced tokens authorises a sample",
+        "src/stealthbench/adapters/streaming.py",
+        (
+            "    if not assembly.saw_content"
+            " and not (reported_output is not None and reported_output > 0):"
+        ),
+        "    if not assembly.saw_content and assembly.usage.input_tokens is None:",
+        "tests/contract",
+    ),
+    Mutation(
+        "M57",
+        "review6-8: a no-fixture detail skips redaction again",
+        "src/stealthbench/adapters/base.py",
+        (
+            "                failure=safe_failure(\n                    FailureKind.NO_FIXTURE,\n"
+            "                    (\n"
+            '                        f"no recorded exchange for '
+            '{endpoint_id}/{benchmark_id}/{item_id} "\n'
+            '                        f"repeat {sample_key.repeat_id}"\n'
+            "                    ),\n"
+            "                    extra_secrets=self.extra_secrets,\n"
+            "                )"
+        ),
+        (
+            "                failure=TransportFailure(\n"
+            "                    kind=FailureKind.NO_FIXTURE,\n"
+            "                    detail=(\n"
+            '                        f"no recorded exchange for '
+            '{endpoint_id}/{benchmark_id}/{item_id} "\n'
+            '                        f"repeat {sample_key.repeat_id}"\n'
+            "                    ),\n"
+            "                )"
+        ),
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M58",
+        "review6-2: the zen streaming refusal drops the reported settings again",
+        "src/stealthbench/adapters/zen.py",
+        (
+            '                    "streaming was requested but this endpoint does not advertise it",'
+            "\n                    extra_secrets=self.extra_secrets,\n                ),"
+            "\n                unsupported=unsupported + recorded_settings,"
+        ),
+        (
+            '                    "streaming was requested but this endpoint does not advertise it",'
+            "\n                    extra_secrets=self.extra_secrets,\n                ),"
+        ),
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
         "M9",
         "new: the catalog is not read from the recorded GET /models response",
         "src/stealthbench/adapters/zen.py",
@@ -559,6 +674,19 @@ def _restore_on_exit(target: Path, original: str):
     return restore
 
 
+def stale_anchors() -> list[str]:
+    """Mutations whose anchor no longer matches the source.
+
+    Checked up front so a refactor that invalidates an anchor is reported once and
+    loudly, instead of quietly changing what the harness measures.
+    """
+    stale = []
+    for mutation in MUTATIONS:
+        if mutation.old not in (ROOT / mutation.path).read_text(encoding="utf-8"):
+            stale.append(mutation.ident)
+    return stale
+
+
 def run(args: list[str]) -> tuple[int, str]:
     # Bytecode caching is disabled: a cached .pyc whose mtime and size still match the
     # mutated source would make the mutation invisible, and the run would pass for the
@@ -578,6 +706,9 @@ def emit(line: str) -> None:
 
 def main() -> int:
     failures: list[str] = []
+    stale = stale_anchors()
+    if stale:
+        emit(f"STALE ANCHORS: {', '.join(stale)} -- the harness no longer matches the source")
     for mutation in MUTATIONS:
         target = ROOT / mutation.path
         original = target.read_text(encoding="utf-8")

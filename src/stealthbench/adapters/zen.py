@@ -36,10 +36,10 @@ from stealthbench.adapters.base import (
     CatalogSnapshot,
     FailureKind,
     ProviderAdapter,
-    TransportFailure,
     UnsupportedSetting,
     _alias_of,
     _capabilities_of,
+    _catalog_models,
     _context_window_of,
     _first_str,
     _route_label,
@@ -90,6 +90,16 @@ def map_finish_reason(reason: str | None) -> FinishStatus | None:
     return _FINISH_REASONS.get(reason.lower(), "error")
 
 
+def _mapped_failure_kind(name: Any) -> FailureKind | None:
+    """A recorded failure kind, when it is one this vocabulary defines."""
+    if not isinstance(name, str):
+        return None
+    try:
+        return FailureKind(name)
+    except ValueError:
+        return FailureKind.SERVER_ERROR
+
+
 def map_http_status(status: int | None) -> FailureKind | None:
     """Map an HTTP status onto a failure kind, or ``None`` when the call succeeded."""
     if status is None or 200 <= status < 300:
@@ -128,7 +138,7 @@ def normalize_catalog(
         raw = {"data": payload}
     elif isinstance(payload, Mapping):
         raw = dict(payload)
-        models = payload.get("data", payload.get("models", []))
+        models = _catalog_models(payload)
     else:
         raw = {"value": payload}
         models = []
@@ -483,22 +493,29 @@ class ZenAdapter(ProviderAdapter):
         unsupported = unsupported + _recorded_unsupported(record, request, self.extra_secrets)
         if record is None:
             return AdapterResult(
-                failure=TransportFailure(
-                    kind=FailureKind.NO_FIXTURE,
-                    detail=f"no recorded Zen exchange for {sample_key.task_id}",
+                failure=safe_failure(
+                    FailureKind.NO_FIXTURE,
+                    f"no recorded Zen exchange for {sample_key.task_id}",
+                    extra_secrets=self.extra_secrets,
                 ),
                 unsupported=unsupported,
             )
 
         status = record.get("http_status")
-        failure_kind = map_http_status(status if isinstance(status, int) else None)
+        real_status = status if isinstance(status, int) and not isinstance(status, bool) else None
+        recorded_failure = record.get("outcome") == "error" or isinstance(
+            record.get("failure_kind"), str
+        )
+        failure_kind = map_http_status(real_status)
+        if failure_kind is None and recorded_failure:
+            failure_kind = _mapped_failure_kind(record.get("failure_kind"))
         if failure_kind is not None:
             body = record.get("body")
             return AdapterResult(
                 failure=safe_failure(
                     failure_kind,
                     _detail_of(record),
-                    http_status=status if isinstance(status, int) else None,
+                    http_status=real_status,
                     retry_after_seconds=_retry_after(record),
                     body=body if isinstance(body, Mapping) else None,
                     extra_secrets=self.extra_secrets,
@@ -509,10 +526,11 @@ class ZenAdapter(ProviderAdapter):
         payload = record.get("json")
         if not isinstance(payload, Mapping):
             return AdapterResult(
-                failure=TransportFailure(
-                    kind=FailureKind.PROTOCOL,
-                    detail="recorded exchange carried no JSON body",
-                    http_status=status if isinstance(status, int) else None,
+                failure=safe_failure(
+                    FailureKind.PROTOCOL,
+                    "recorded exchange carried no JSON body",
+                    http_status=real_status,
+                    extra_secrets=self.extra_secrets,
                 ),
                 unsupported=unsupported,
             )
@@ -521,10 +539,11 @@ class ZenAdapter(ProviderAdapter):
         tool_calls = extract_tool_calls(payload)
         if text is None and not tool_calls:
             return AdapterResult(
-                failure=TransportFailure(
-                    kind=FailureKind.PROTOCOL,
-                    detail="chat completion contained neither content nor tool calls",
+                failure=safe_failure(
+                    FailureKind.PROTOCOL,
+                    "chat completion contained neither content nor tool calls",
                     http_status=200,
+                    extra_secrets=self.extra_secrets,
                 ),
                 unsupported=unsupported,
             )
@@ -593,7 +612,8 @@ class ZenAdapter(ProviderAdapter):
                 unsupported=unsupported,
             )
         status = record.get("http_status")
-        failure_kind = map_http_status(status if isinstance(status, int) else None)
+        real_status = status if isinstance(status, int) and not isinstance(status, bool) else None
+        failure_kind = map_http_status(real_status)
         if failure_kind is not None:
             body = record.get("body")
             return AdapterResult(
@@ -621,7 +641,7 @@ class ZenAdapter(ProviderAdapter):
                     if isinstance(recorded_kind, str)
                     else FailureKind.SERVER_ERROR,
                     _detail_of(record),
-                    http_status=status if isinstance(status, int) else None,
+                    http_status=real_status,
                     retry_after_seconds=_retry_after(record),
                     body=body if isinstance(body, Mapping) else None,
                     extra_secrets=self.extra_secrets,
@@ -643,7 +663,8 @@ class ZenAdapter(ProviderAdapter):
                     FailureKind.UNSUPPORTED_SETTING,
                     "streaming was requested but this endpoint does not advertise it",
                     extra_secrets=self.extra_secrets,
-                )
+                ),
+                unsupported=unsupported + recorded_settings,
             )
         raw = b"".join(
             b"data: " + json.dumps(dict(frame), ensure_ascii=False).encode("utf-8") + b"\n\n"
@@ -762,7 +783,9 @@ def _retry_after(record: Mapping[str, Any]) -> float | None:
     headers = record.get("headers")
     if not isinstance(headers, Mapping):
         return None
-    value = headers.get("retry-after") or headers.get("Retry-After")
+    # `0` is a value the gateway reported, not an absent header; `or` would drop it.
+    raw = headers.get("retry-after")
+    value = raw if raw is not None else headers.get("Retry-After")
     if isinstance(value, str) and value.strip().isdigit():
         return float(value.strip())
     if isinstance(value, (int, float)) and not isinstance(value, bool):

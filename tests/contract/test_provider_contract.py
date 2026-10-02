@@ -391,8 +391,16 @@ def test_a_fully_capable_endpoint_reports_nothing_unsupported() -> None:
 def test_a_requested_setting_the_endpoint_lacks_is_named() -> None:
     reported = check_requested_settings(request_(), NO_CAPABILITIES, stream=True)
     assert [item.setting for item in reported] == ["stream"]
-    assert reported[0].requested is True
+    # The value reported is what the request carries. This asserted a hardcoded True
+    # while `request_()` leaves stream unset, so the report contradicted the request.
+    assert reported[0].requested is request_().stream
     assert "does not advertise" in reported[0].reason
+
+
+def test_a_streaming_request_reports_that_it_asked_for_a_stream() -> None:
+    reported = check_requested_settings(request_(stream=True), NO_CAPABILITIES, stream=True)
+    assert [item.setting for item in reported] == ["stream"]
+    assert reported[0].requested is True
 
 
 # ---------------------------------------------------------------------------
@@ -1361,3 +1369,175 @@ def test_both_adapters_extract_the_same_fields_from_one_catalog_record() -> None
     assert fixture_entry.capabilities.logprobs is True
     assert fixture_entry.display_name == "Alias A"
     assert fixture_entry.provider == "someone-else"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the sixth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_the_streaming_path_redacts_a_declared_secret_in_a_reported_setting() -> None:
+    """HIGH: the success return recomputed the report without the declared secrets."""
+    blind = "ZZdeclaredEndpointSecret77"
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "leaky-stream",
+                "capabilities": Capabilities(
+                    streaming=True,
+                    tool_calls=False,
+                    reasoning=False,
+                    usage_reporting=False,
+                    logprobs=False,
+                ).model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "x",
+                        "unsupported_settings": ["stop"],
+                        "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+                    }
+                ],
+            }
+        ),
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=request_(stop=(blind,)),
+        prompt_hash=PROMPT_HASH,
+    )
+    assert outcome.ok
+    assert blind not in json.dumps(outcome.to_dict())
+
+
+def test_an_incoherent_capture_timing_does_not_abort_the_dispatch() -> None:
+    """A capture is data: one bad timing line must not raise out of complete()."""
+    for recorded_streaming in (
+        {"first_content_seconds": 5.0, "total_seconds": 1.0},
+        {"total_seconds": float("inf")},
+        {"first_content_seconds": -1.0},
+    ):
+        transport = FixtureTransport(
+            FixtureBundle.model_validate(
+                {
+                    "name": "odd-timings",
+                    "capabilities": NO_CAPABILITIES.model_dump(),
+                    "exchanges": [
+                        {
+                            "endpoint_id": "fixture-a",
+                            "benchmark_id": "ifeval",
+                            "item_id": "syn-if-001",
+                            "response": "x",
+                            "streaming": recorded_streaming,
+                        }
+                    ],
+                }
+            )
+        )
+        outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+        assert outcome.ok, recorded_streaming
+        assert outcome.result is not None
+        assert outcome.result.streaming is None, "an unusable timing is dropped, not raised"
+
+
+def test_coherent_capture_timings_are_kept() -> None:
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "good-timings",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "x",
+                        "streaming": {
+                            "first_content_seconds": 0.1,
+                            "total_seconds": 0.5,
+                            "chunk_count": 3,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None
+    assert outcome.result.streaming is not None
+    assert outcome.result.streaming.chunk_count == 3
+
+
+def test_both_adapters_read_a_catalog_that_carries_both_keys_the_same_way() -> None:
+    """`data` wins over `models` on both routes, so one payload means one snapshot."""
+    from stealthbench.adapters.zen import ZenAdapter
+
+    payload = {
+        "models": [{"id": "shared-alias", "capabilities": {"streaming": True}}],
+        "data": [{"id": "shared-alias", "capabilities": {"streaming": False}}],
+    }
+    fixture_snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "both-keys",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": payload,
+            }
+        )
+    ).discover()
+    zen_snapshot = ZenAdapter(catalog_payload=payload).discover()
+    fixture_entry = fixture_snapshot.get("shared-alias")
+    zen_entry = zen_snapshot.get("shared-alias")
+    assert fixture_entry is not None and zen_entry is not None
+    assert fixture_entry.model_dump() == zen_entry.model_dump()
+
+
+def test_a_no_fixture_detail_is_redacted_on_every_path() -> None:
+    """The no-fixture branches build a detail string from ids like any other text."""
+    blind = "ZZdeclaredEndpointSecret77"
+    empty = FixtureTransport(
+        FixtureBundle.model_validate(
+            {"name": "empty", "capabilities": NO_CAPABILITIES.model_dump()}
+        ),
+        extra_secrets=frozenset({blind}),
+    )
+    secret_item = key(item=blind)
+    request = request_()
+    for outcome in (
+        empty.complete(sample_key=secret_item, request=request, prompt_hash=PROMPT_HASH),
+        empty.stream(sample_key=secret_item, request=request, prompt_hash=PROMPT_HASH),
+    ):
+        assert outcome.failure is not None
+        assert blind not in outcome.failure.detail
+
+
+def test_data_wins_over_models_when_a_catalog_carries_both_keys() -> None:
+    """The shared reader's precedence, pinned on both routes rather than just agreeing.
+
+    Comparing the two adapters cannot catch a change to the order they share, so the
+    resulting snapshot is asserted directly.
+    """
+    from stealthbench.adapters.zen import ZenAdapter
+
+    payload = {
+        "models": [{"id": "shared-alias", "capabilities": {"streaming": True}}],
+        "data": [{"id": "shared-alias", "capabilities": {"streaming": False}}],
+    }
+    for snapshot in (
+        FixtureTransport(
+            FixtureBundle.model_validate(
+                {
+                    "name": "both-keys",
+                    "capabilities": NO_CAPABILITIES.model_dump(),
+                    "catalog": payload,
+                }
+            )
+        ).discover(),
+        ZenAdapter(catalog_payload=payload).discover(),
+    ):
+        entry = snapshot.get("shared-alias")
+        assert entry is not None
+        assert entry.capabilities.streaming is False, "`data` wins over `models`"
