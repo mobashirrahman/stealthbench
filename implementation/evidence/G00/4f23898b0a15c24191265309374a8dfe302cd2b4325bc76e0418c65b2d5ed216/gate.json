@@ -1,0 +1,326 @@
+{
+  "artifacts": [
+    "docs/upstream-inventory.md",
+    "docs/contracts.md",
+    "constraints-dev.txt",
+    "configs/offline-demo.json",
+    "configs/pilot.json",
+    "configs/full.json",
+    ".github/workflows/ci.yml",
+    ".github/workflows/sandbox.yml",
+    ".github/workflows/live.yml"
+  ],
+  "collected": 109,
+  "commands": [
+    {
+      "command": "ruff check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "lint",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": "ruff format --check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "format",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "16 files already formatted"
+      ]
+    },
+    {
+      "command": "mypy src/stealthbench",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "typecheck",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 2 source files"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "unit_contract",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "....................                                                     [100%]",
+        "92 passed in 7.82s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/integration tests/replay -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "integration_replay",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "..............                                                           [100%]",
+        "14 passed in 4.41s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "full_offline_collection",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "SKIPPED [2] tests/live/test_live_authorization.py:30: blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+        "107 passed, 2 skipped in 12.13s"
+      ]
+    },
+    {
+      "command": "stealthbench --help",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_help",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Live execution is never implicit. A run that contacts a provider requires an",
+        "explicit campaign manifest, configured credentials and spending caps."
+      ]
+    },
+    {
+      "command": "stealthbench version",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_version",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "{\"schema_version\": \"1.0\", \"status\": \"ok\", \"version\": \"0.1.0\"}"
+      ]
+    },
+    {
+      "command": "stealthbench bogus-command",
+      "exit_status": 2,
+      "expectation": "non-zero exit",
+      "name": "cli_invalid_command",
+      "satisfied": true,
+      "stderr_tail": [
+        "usage: stealthbench [-h] [--version] <command> ...",
+        "stealthbench: error: argument <command>: invalid choice: 'bogus-command' (choose from 'version', 'manifest', 'run', 'replay', 'report', 'signatures', 'identify', 'doctor')"
+      ],
+      "stdout_tail": []
+    },
+    {
+      "command": "stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 3,
+      "expectation": "non-zero exit",
+      "name": "cli_pending_manifest",
+      "satisfied": true,
+      "stderr_tail": [
+        "{\"command\": \"manifest validate\", \"gate\": \"G01\", \"status\": \"not_implemented\"}"
+      ],
+      "stdout_tail": []
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/live"
+  ],
+  "environment": {
+    "container_runtime": "not probed at G00; the sandbox suite is registered as not-yet-started",
+    "dependency_lock": "constraints-dev.txt (full transitive dev/test closure)",
+    "platform": "linux",
+    "python": "3.12.3",
+    "tool_versions": {
+      "hatchling": "1.28.0",
+      "httpx": "0.28.1",
+      "hypothesis": "6.142.1",
+      "mypy": "1.18.2",
+      "pydantic": "2.12.5",
+      "pytest": "9.1.1",
+      "pytest-cov": "7.1.0",
+      "ruff": "0.15.1"
+    },
+    "venv": ".venv"
+  },
+  "exit_statuses": {
+    "cli_help": 0,
+    "cli_invalid_command": 2,
+    "cli_pending_manifest": 3,
+    "cli_version": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_criteria": [
+    {
+      "criterion": "package installs",
+      "evidence": "tests/integration/test_install.py::test_wheel_installs_into_a_fresh_environment_and_console_script_runs builds a wheel with --no-build-isolation, installs it into a clean venv with --no-index, and runs the installed console script for both --help and version",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "empty CLI commands cannot claim successful evaluation",
+      "evidence": "six declared-but-unimplemented commands exit 3 and write nothing to stdout; mutation returning EXIT_OK fails 9 tests",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "offline tests cannot reach external network",
+      "evidence": "tests/conftest.py installs a loopback-only guard over socket.socket (connect, connect_ex, sendto, sendmsg), create_connection and getaddrinfo; 9 tests assert external TCP, UDP and DNS are denied and that loopback TCP and UDP still work; removing the UDP guard fails test_external_udp_sendto_is_denied",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "all seven benchmark components have an explicit upstream inventory entry, including both coding components",
+      "evidence": "tests/contract/test_upstream_inventory.py asserts exactly 7 direct + 2 agent entries and that code_generation is exactly {livecodebench, evalplus}",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "unavailable assets have a concrete acquisition condition",
+      "evidence": "6 of 9 components are conditional; each names a condition, and the summary table status is cross-checked against the structured entry",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "configuration rejection",
+      "evidence": "missing file, directory-instead-of-file and missing required flag all exit non-zero with empty stdout",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "marker validation",
+      "evidence": "a pytester-generated run proves an unregistered marker fails collection; all 8 plan markers are registered, described and used",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "CI fixture selection",
+      "evidence": ".github/workflows/ci.yml runs only the offline suites with no marker deselection; sandbox.yml and live.yml are separate, carry no embedded credentials and reference only CLI flags the parser defines",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "dependency lock",
+      "evidence": "constraints-dev.txt pins the full transitive dev/test closure; pyproject.toml pins direct dependencies with ==",
+      "result": "satisfied"
+    }
+  ],
+  "gate_id": "G00",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 14,
+      "failed": 0,
+      "passed": 14,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 92,
+      "failed": 0,
+      "passed": 92,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "mutation_checks": [
+    {
+      "detected_by": [
+        "tests/unit/test_cli_shell.py",
+        "tests/integration/test_install.py"
+      ],
+      "failures_observed": 9,
+      "mutation": "an unimplemented CLI command returns EXIT_OK instead of EXIT_NOT_IMPLEMENTED"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_profile_spec.py::test_any_empty_suite_is_registered_as_not_yet_started"
+      ],
+      "failures_observed": 1,
+      "mutation": "unregister the empty tests/replay suite from suites_not_yet_started"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_toolchain_config.py::test_external_udp_sendto_is_denied"
+      ],
+      "failures_observed": 1,
+      "mutation": "remove the UDP sendto guard from the network fixture"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_toolchain_config.py::test_workflows_only_invoke_flags_the_cli_defines"
+      ],
+      "failures_observed": 1,
+      "mutation": "reintroduce `stealthbench run --dry-run` into live.yml"
+    }
+  ],
+  "not_established_by_this_gate": [
+    "No benchmark has been executed and no score exists.",
+    "No provider endpoint has been contacted; no credential is configured.",
+    "The offline-demo campaign validates but cannot run: no fixture transcripts exist until G03 (T03A).",
+    "Live readiness, setup, pilot and full-run gates are untested and remain blocked_external.",
+    "Identity evidence is not started; no probability or exact-version claim is available.",
+    "Overall line coverage was not measured; it is a diagnostic, not a gate condition."
+  ],
+  "passed": 107,
+  "prerequisite_evidence": [],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T00A",
+    "T00B",
+    "T00C"
+  ],
+  "review": {
+    "additional_guards_added": [
+      "tests/contract/test_toolchain_config.py::test_workflows_only_invoke_flags_the_cli_defines walks every workflow's stealthbench invocation against the live argparse tree",
+      "tests/contract/test_toolchain_config.py::test_scrubber_removes_an_inherited_credential runs a nested offline test under a poisoned environment"
+    ],
+    "resolved": [
+      "gate.json recorded test counts matching no reproducible run - now re-measured per suite and scoped with counted_suites; 109 collected / 107 passed / 2 skipped",
+      "docs/contracts.md EndpointSpec omitted the four independent identity labels its own prose and every profile require - added, and the tests now read them from the spec instead of hardcoding them",
+      ".github/workflows/live.yml invoked `stealthbench run --dry-run`, a flag that does not exist until G04 (T04D) - replaced with `stealthbench doctor` plus an explicit INERT UNTIL G14 banner",
+      "docs/upstream-inventory.md described the RULER rulerv*-ns branches as containing only a README - corrected after re-checking the branch tree: README + run_example.sh + LICENSE, driving NeMo-Skills branch chsieh/ruler-remove-prefix",
+      "tests/conftest.py offline_env was requested by no test - replaced by an autouse credential scrubber that exempts live/paid, proven by a nested run under a poisoned environment",
+      "the network guard blocked TCP but not UDP sendto/sendmsg - both overridden now, with a test asserting UDP egress is denied and loopback UDP still works",
+      "the canary test asserted its own inputs - predicates extracted and a real canary planted in a copy of a real profile to prove the detectors fire and are quiet on the genuine file",
+      "configs/README.md claimed CI uses offline-demo.json - reworded to intended-for, noting no fixture transcripts exist until G03",
+      "G00 requires a dependency lock - constraints-dev.txt added pinning the full transitive closure, referenced by README and all three workflows",
+      "tests/live claimed workflows execute it while a module-level live marker covered an offline test - markers moved onto the individual tests and live.yml now runs the live suite",
+      "spec fields required_endpoint_fields and campaign_modes were enforced by no test - both checked against every profile now",
+      "the install test ran `python -m stealthbench.cli` rather than the entry point - it now installs and executes the real console script"
+    ],
+    "round": 2,
+    "round_1_findings": 12,
+    "round_1_outcome": "FAIL"
+  },
+  "review_decision": "PASS",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py::test_live_suite_requires_explicit_authorization": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+    "tests/live/test_live_authorization.py::test_paid_suite_requires_a_numeric_spending_cap": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "4f23898b0a15c24191265309374a8dfe302cd2b4325bc76e0418c65b2d5ed216",
+    "kind": "source_tree_sha256",
+    "note": "Not yet a git checkout, so the revision is a content digest over all source, config and workflow files.",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d' ' -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 74,
+    "tests/integration": 14,
+    "tests/live": 3,
+    "tests/replay": 0,
+    "tests/sandbox": 0,
+    "tests/unit": 18
+  },
+  "supersedes": "the first G00 record (digest 9e420fb9ef63358566eafd0c0321e393e519752f2ab62a02185e4a6c53c815aa), withdrawn by review because its test counts matched no reproducible run",
+  "vacuous_suites": {
+    "tests/replay": "registered in docs/contracts.md suites_not_yet_started (T02C / G02)",
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07)"
+  }
+}

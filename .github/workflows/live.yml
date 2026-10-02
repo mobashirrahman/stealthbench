@@ -1,0 +1,77 @@
+name: live
+
+# Authorized live campaigns only. Dispatch-only by design: nothing here runs on
+# push or on pull requests.
+#
+# INERT UNTIL G14. As of gate G00 this workflow is a recorded intention, not a
+# working path: `stealthbench run` exits 3 (not_implemented) because live dispatch
+# lands in G04 (T04D) and campaign execution in G05. The live suite below runs and
+# reports `blocked_external` until an operator supplies credentials and a cap. Do not
+# treat a green run here as evidence that a campaign executed.
+#
+# Credentials are read from repository secrets at run time and are never written
+# into this file, into a log, or into a stored artifact. The runner still enforces
+# the campaign manifest's own request, token and cost caps; a cap is a ceiling,
+# not an approval.
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_config:
+        description: "Path to the campaign profile to execute"
+        required: true
+        type: string
+      spending_cap_usd:
+        description: "Hard ceiling for this dispatch, in USD"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-campaign
+  cancel-in-progress: false
+
+jobs:
+  campaign:
+    name: authorized live campaign
+    runs-on: ubuntu-latest
+    environment: live-campaign
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c constraints-dev.txt -e '.[dev]'
+
+      - name: Live authorization preflight
+        env:
+          STEALTHBENCH_ZEN_API_KEY: ${{ secrets.STEALTHBENCH_ZEN_API_KEY }}
+          STEALTHBENCH_SPENDING_CAP_USD: ${{ inputs.spending_cap_usd }}
+          STEALTHBENCH_LIVE_AUTHORIZATION: "1"
+        run: |
+          # Exits 3 (not_implemented) until G04 lands dispatch; fails the job loudly
+          # rather than reporting an evaluation that did not happen.
+          stealthbench doctor
+
+      - name: Live and paid suite
+        run: pytest --strict-markers tests/live
+
+      - name: Run campaign under caps
+        env:
+          STEALTHBENCH_ZEN_API_KEY: ${{ secrets.STEALTHBENCH_ZEN_API_KEY }}
+          STEALTHBENCH_SPENDING_CAP_USD: ${{ inputs.spending_cap_usd }}
+          STEALTHBENCH_LIVE_AUTHORIZATION: "1"
+        run: stealthbench run "${{ inputs.campaign_config }}"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stealthbench-campaign-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 30

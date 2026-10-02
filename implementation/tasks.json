@@ -1,0 +1,1325 @@
+{
+  "schema_version": "1.0",
+  "status": "in_progress",
+  "instructions": "Follow IMPLEMENTATION_PLAN.md. Paths and commands are implementation targets, not evidence of existing code. Readiness requires passed prerequisite gates and done task dependencies. Split tasks exceeding three production modules.",
+  "tasks": [
+    {
+      "id": "T00A",
+      "title": "Package, CLI shell and toolchain",
+      "gate": "G00",
+      "status": "done",
+      "depends_on": [],
+      "requires_gates": [],
+      "production_target": "src/stealthbench/cli.py",
+      "test_target": "tests/integration/test_install.py",
+      "acceptance": [
+        "Fresh installation; CLI help works; invalid commands fail without fabricated results."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G00",
+        "source_revision": "3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594",
+        "record": "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json",
+        "review": "pass (round 2)",
+        "note": "Evidence revised 2026-10-02: the operator ruled that data licensing does not block acquisition. Licensing stays recorded as an upstream fact; MATH-500 and LiveCodeBench are now available and the four remaining conditional components are conditional on operational prerequisites only. Earlier G00 records are preserved, not overwritten."
+      }
+    },
+    {
+      "id": "T00B",
+      "title": "Inventory upstream assets and freeze revisions",
+      "gate": "G00",
+      "status": "done",
+      "depends_on": [
+        "T00A"
+      ],
+      "requires_gates": [],
+      "production_target": "docs/upstream-inventory.md",
+      "test_target": "tests/contract/test_upstream_inventory.py",
+      "acceptance": [
+        "Seven direct components and two agent benchmarks have revisions, modes, licenses and acquisition conditions."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G00",
+        "source_revision": "3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594",
+        "record": "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json",
+        "review": "pass (round 2)",
+        "note": "Evidence revised 2026-10-02: the operator ruled that data licensing does not block acquisition. Licensing stays recorded as an upstream fact; MATH-500 and LiveCodeBench are now available and the four remaining conditional components are conditional on operational prerequisites only. Earlier G00 records are preserved, not overwritten."
+      }
+    },
+    {
+      "id": "T00C",
+      "title": "Freeze interfaces, profiles and offline CI",
+      "gate": "G00",
+      "status": "done",
+      "depends_on": [
+        "T00B"
+      ],
+      "requires_gates": [],
+      "production_target": "docs/contracts.md",
+      "test_target": "tests/contract/test_profile_spec.py",
+      "acceptance": [
+        "Interfaces and profiles specify missing values, status semantics, caps and offline defaults."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G00",
+        "source_revision": "3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594",
+        "record": "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json",
+        "review": "pass (round 2)",
+        "note": "Evidence revised 2026-10-02: the operator ruled that data licensing does not block acquisition. Licensing stays recorded as an upstream fact; MATH-500 and LiveCodeBench are now available and the four remaining conditional components are conditional on operational prerequisites only. Earlier G00 records are preserved, not overwritten."
+      }
+    },
+    {
+      "id": "T01A",
+      "title": "Campaign and endpoint schemas",
+      "gate": "G01",
+      "status": "done",
+      "depends_on": [],
+      "requires_gates": [
+        "G00"
+      ],
+      "production_target": "src/stealthbench/schemas/campaign.py",
+      "test_target": "tests/unit/test_campaign_schema.py",
+      "acceptance": [
+        "Reject incompatible versions, duplicate IDs, non-finite limits and credentials in serialized manifests."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G01",
+        "source_revision": "790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006",
+        "record": "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json",
+        "review": "pass (round 2)",
+        "note": "Independent review round 1 returned FAIL with 6 defects, all real and all fixed: PromptRef dropped stop sequences so two different requests shared one prompt identity and the recorded prompt hash was never verified; free-text manifest fields accepted pasted credentials (and a test asserted the canary survived); credential_ref used a blocklist that a JWT or bare hex key walks past; GateEvidence certified passes resting on zero passing tests or a non-zero command; FrozenModel claimed immutability while scoring_protocol stayed a mutable dict, letting a hashed manifest drift; and an unknown item count became 0, disabling the request-cap check. Each fix has a dedicated guard, and each defect was re-introduced as a mutation to confirm the guard fires."
+      }
+    },
+    {
+      "id": "T01B",
+      "title": "Task, result, identity and gate schemas",
+      "gate": "G01",
+      "status": "done",
+      "depends_on": [
+        "T01A"
+      ],
+      "requires_gates": [
+        "G00"
+      ],
+      "production_target": "src/stealthbench/schemas/results.py",
+      "test_target": "tests/contract/test_result_schema.py",
+      "acceptance": [
+        "Usage remains nullable; retries and accepted samples are distinct; evaluator-only data cannot enter requests."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G01",
+        "source_revision": "790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006",
+        "record": "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json",
+        "review": "pass (round 2)",
+        "note": "Independent review round 1 returned FAIL with 6 defects, all real and all fixed: PromptRef dropped stop sequences so two different requests shared one prompt identity and the recorded prompt hash was never verified; free-text manifest fields accepted pasted credentials (and a test asserted the canary survived); credential_ref used a blocklist that a JWT or bare hex key walks past; GateEvidence certified passes resting on zero passing tests or a non-zero command; FrozenModel claimed immutability while scoring_protocol stayed a mutable dict, letting a hashed manifest drift; and an unknown item count became 0, disabling the request-cap check. Each fix has a dedicated guard, and each defect was re-introduced as a mutation to confirm the guard fires."
+      }
+    },
+    {
+      "id": "T01C",
+      "title": "Canonical manifests and artifact hashing",
+      "gate": "G01",
+      "status": "done",
+      "depends_on": [
+        "T01A",
+        "T01B"
+      ],
+      "requires_gates": [
+        "G00"
+      ],
+      "production_target": "src/stealthbench/schemas/hashing.py, src/stealthbench/schemas/manifest.py",
+      "test_target": "tests/unit/test_manifest_hash.py",
+      "acceptance": [
+        "Ordering preserves canonical hashes while prompt, item and evaluator changes invalidate them."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G01",
+        "source_revision": "790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006",
+        "record": "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json",
+        "review": "pass (round 2)",
+        "note": "Independent review round 1 returned FAIL with 6 defects, all real and all fixed: PromptRef dropped stop sequences so two different requests shared one prompt identity and the recorded prompt hash was never verified; free-text manifest fields accepted pasted credentials (and a test asserted the canary survived); credential_ref used a blocklist that a JWT or bare hex key walks past; GateEvidence certified passes resting on zero passing tests or a non-zero command; FrozenModel claimed immutability while scoring_protocol stayed a mutable dict, letting a hashed manifest drift; and an unknown item count became 0, disabling the request-cap check. Each fix has a dedicated guard, and each defect was re-introduced as a mutation to confirm the guard fires."
+      }
+    },
+    {
+      "id": "T02A",
+      "title": "Durable append-only events and artifacts",
+      "gate": "G02",
+      "status": "done",
+      "depends_on": [],
+      "requires_gates": [
+        "G01"
+      ],
+      "production_target": "src/stealthbench/storage/events.py",
+      "test_target": "tests/integration/test_storage_recovery.py",
+      "acceptance": [
+        "Interrupted writes and corrupt records never invent completed samples; hashes are checked."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G02",
+        "source_revision": "4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35",
+        "record": "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json",
+        "review": "pass (round 2)",
+        "note": "Independent review round 1 returned FAIL with 13 defects, all real: a credential echoed as a JSON key was never redacted; a complete final record whose newline was lost was dropped while a single-record store reported clean; invalid UTF-8 was silently replaced with U+FFFD inside valid-looking records; payload_hash was checked only for self-consistency so an event could be repointed at another artifact; identical payloads collided on a content-derived event_id and collapsed in the index; attempt_id and manifest_hash bypassed CSV redaction and formula defusing; the index published two contradictory accepted-sample counts; replay never bound a payload's campaign to its event; an unresolved attempt was silently dropped by replay (its test was vacuous); the recorded evidence claimed a mutation that did not reproduce; the process-interruption test never interrupted anything; ingest silently dropped rows on a shorter re-ingest; and events_skipped miscounted. All are fixed with dedicated regression tests, each re-verified by re-introducing the mutation. The false mutation claim is now recorded honestly as failures_observed: 0."
+      }
+    },
+    {
+      "id": "T02B",
+      "title": "SQLite indexing and redacted exports",
+      "gate": "G02",
+      "status": "done",
+      "depends_on": [
+        "T02A"
+      ],
+      "requires_gates": [
+        "G01"
+      ],
+      "production_target": "src/stealthbench/storage/index.py",
+      "test_target": "tests/integration/test_redaction.py",
+      "acceptance": [
+        "Duplicate ingestion is idempotent; headers, errors and exports contain no canary secrets."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G02",
+        "source_revision": "4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35",
+        "record": "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json",
+        "review": "pass (round 2)",
+        "note": "Independent review round 1 returned FAIL with 13 defects, all real: a credential echoed as a JSON key was never redacted; a complete final record whose newline was lost was dropped while a single-record store reported clean; invalid UTF-8 was silently replaced with U+FFFD inside valid-looking records; payload_hash was checked only for self-consistency so an event could be repointed at another artifact; identical payloads collided on a content-derived event_id and collapsed in the index; attempt_id and manifest_hash bypassed CSV redaction and formula defusing; the index published two contradictory accepted-sample counts; replay never bound a payload's campaign to its event; an unresolved attempt was silently dropped by replay (its test was vacuous); the recorded evidence claimed a mutation that did not reproduce; the process-interruption test never interrupted anything; ingest silently dropped rows on a shorter re-ingest; and events_skipped miscounted. All are fixed with dedicated regression tests, each re-verified by re-introducing the mutation. The false mutation claim is now recorded honestly as failures_observed: 0."
+      }
+    },
+    {
+      "id": "T02C",
+      "title": "Deterministic replay reader",
+      "gate": "G02",
+      "status": "done",
+      "depends_on": [
+        "T02A",
+        "T02B"
+      ],
+      "requires_gates": [
+        "G01"
+      ],
+      "production_target": "src/stealthbench/storage/replay.py",
+      "test_target": "tests/replay/test_replay_reader.py",
+      "acceptance": [
+        "Replay reconstructs stored samples without external calls and rejects corrupt provenance."
+      ],
+      "execution_mode": "offline",
+      "evidence": {
+        "gate": "G02",
+        "source_revision": "4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35",
+        "record": "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json",
+        "review": "pass (round 2)",
+        "note": "Independent review round 1 returned FAIL with 13 defects, all real: a credential echoed as a JSON key was never redacted; a complete final record whose newline was lost was dropped while a single-record store reported clean; invalid UTF-8 was silently replaced with U+FFFD inside valid-looking records; payload_hash was checked only for self-consistency so an event could be repointed at another artifact; identical payloads collided on a content-derived event_id and collapsed in the index; attempt_id and manifest_hash bypassed CSV redaction and formula defusing; the index published two contradictory accepted-sample counts; replay never bound a payload's campaign to its event; an unresolved attempt was silently dropped by replay (its test was vacuous); the recorded evidence claimed a mutation that did not reproduce; the process-interruption test never interrupted anything; ingest silently dropped rows on a shorter re-ingest; and events_skipped miscounted. All are fixed with dedicated regression tests, each re-verified by re-introducing the mutation. The false mutation claim is now recorded honestly as failures_observed: 0."
+      }
+    },
+    {
+      "id": "T03A",
+      "title": "Fixture transport and endpoint capabilities",
+      "gate": "G03",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G02"
+      ],
+      "production_target": "src/stealthbench/adapters/base.py",
+      "test_target": "tests/contract/test_provider_contract.py",
+      "acceptance": [
+        "Fixture transport expresses errors, missing usage and unsupported settings through the frozen contract."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T03B",
+      "title": "Zen catalog and chat adapter",
+      "gate": "G03",
+      "status": "todo",
+      "depends_on": [
+        "T03A"
+      ],
+      "requires_gates": [
+        "G02"
+      ],
+      "production_target": "src/stealthbench/adapters/zen.py",
+      "test_target": "tests/contract/test_zen_adapter.py",
+      "acceptance": [
+        "Catalog snapshots and normal/error/tool responses normalize without invented capabilities."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T03C",
+      "title": "Streaming and reference route normalization",
+      "gate": "G03",
+      "status": "todo",
+      "depends_on": [
+        "T03B"
+      ],
+      "requires_gates": [
+        "G02"
+      ],
+      "production_target": "src/stealthbench/adapters/streaming.py",
+      "test_target": "tests/contract/test_streaming.py",
+      "acceptance": [
+        "Split SSE records, Unicode, reasoning and terminal usage preserve content and correct timestamps; route labels stay distinct."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T04A",
+      "title": "Deterministic scheduler and bounded retries",
+      "gate": "G04",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G03"
+      ],
+      "production_target": "src/stealthbench/runner/scheduler.py",
+      "test_target": "tests/unit/test_scheduler.py",
+      "acceptance": [
+        "Interleaving is seeded; concurrency is bounded; only declared transport failures retry."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T04B",
+      "title": "Persistent spending and token ledger",
+      "gate": "G04",
+      "status": "todo",
+      "depends_on": [
+        "T04A"
+      ],
+      "requires_gates": [
+        "G03"
+      ],
+      "production_target": "src/stealthbench/runner/budget.py",
+      "test_target": "tests/unit/test_budget.py",
+      "acceptance": [
+        "Reservations include outstanding concurrent requests; unknown bounds block capped execution; token caps apply to free aliases."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T04C",
+      "title": "Crash recovery and accepted-sample accounting",
+      "gate": "G04",
+      "status": "todo",
+      "depends_on": [
+        "T04A",
+        "T04B"
+      ],
+      "requires_gates": [
+        "G03"
+      ],
+      "production_target": "src/stealthbench/runner/recovery.py",
+      "test_target": "tests/integration/test_resume.py",
+      "acceptance": [
+        "Ambiguous dispatch remains unresolved by default; explicit retries preserve cost history and cannot duplicate accepted samples."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T04D",
+      "title": "Run orchestration, cancellation and dry run",
+      "gate": "G04",
+      "status": "todo",
+      "depends_on": [
+        "T04C"
+      ],
+      "requires_gates": [
+        "G03"
+      ],
+      "production_target": "src/stealthbench/runner/campaign.py",
+      "test_target": "tests/integration/test_campaign_runner.py",
+      "acceptance": [
+        "Cancellation persists state and reservations; dry run validates all inputs without generation."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T05A",
+      "title": "Pinned dataset loading and sample manifests",
+      "gate": "G05",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G04"
+      ],
+      "production_target": "src/stealthbench/benchmarks/datasets.py",
+      "test_target": "tests/contract/test_dataset_manifest.py",
+      "acceptance": [
+        "Selected IDs, revisions, sampling seed and checksums are deterministic; gold data stays evaluator-only."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T05B",
+      "title": "Official IFEval wrapper",
+      "gate": "G05",
+      "status": "todo",
+      "depends_on": [
+        "T05A"
+      ],
+      "requires_gates": [
+        "G04"
+      ],
+      "production_target": "src/stealthbench/benchmarks/ifeval.py",
+      "test_target": "tests/contract/test_ifeval_oracle.py",
+      "acceptance": [
+        "Strict and loose grades match independent pinned official golden fixtures."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T05C",
+      "title": "Run, grade, replay and export workflow",
+      "gate": "G05",
+      "status": "todo",
+      "depends_on": [
+        "T05B"
+      ],
+      "requires_gates": [
+        "G04"
+      ],
+      "production_target": "src/stealthbench/cli.py",
+      "test_target": "tests/integration/test_vertical_workflow.py",
+      "acceptance": [
+        "Offline end-to-end workflow grades stored answers without regeneration and exposes failure denominators."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T06A",
+      "title": "MMLU-Pro generation scoring adapter",
+      "gate": "G06",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G05"
+      ],
+      "production_target": "src/stealthbench/benchmarks/mmlu_pro.py",
+      "test_target": "tests/contract/test_mmlu_pro_oracle.py",
+      "acceptance": [
+        "Ambiguous, invalid and correct choices match frozen extraction rules; no fabricated likelihoods."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T06B",
+      "title": "MATH-500 official scoring adapter",
+      "gate": "G06",
+      "status": "todo",
+      "depends_on": [
+        "T06A"
+      ],
+      "requires_gates": [
+        "G05"
+      ],
+      "production_target": "src/stealthbench/benchmarks/math500.py",
+      "test_target": "tests/contract/test_math500_oracle.py",
+      "acceptance": [
+        "Numerical and symbolic cases match pinned official oracles; parsing is bounded and oversized inputs fail safely."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T07A",
+      "title": "Disposable execution backend and limits",
+      "gate": "G07",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G05"
+      ],
+      "production_target": "src/stealthbench/sandbox/runtime.py",
+      "test_target": "tests/sandbox/test_resource_limits.py",
+      "acceptance": [
+        "Actual runtime enforces wall, memory, process, output and disk limits and cancels cleanly."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T07B",
+      "title": "Evaluator separation and containment checks",
+      "gate": "G07",
+      "status": "todo",
+      "depends_on": [
+        "T07A"
+      ],
+      "requires_gates": [
+        "G05"
+      ],
+      "production_target": "src/stealthbench/sandbox/policy.py",
+      "test_target": "tests/sandbox/test_isolation.py",
+      "acceptance": [
+        "Host/evaluator secrets, traversal, symlinks and network access are blocked by the real runtime."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T07C",
+      "title": "LiveCodeBench official wrapper",
+      "gate": "G07",
+      "status": "todo",
+      "depends_on": [
+        "T07B"
+      ],
+      "requires_gates": [
+        "G05"
+      ],
+      "production_target": "src/stealthbench/benchmarks/livecodebench.py",
+      "test_target": "tests/contract/test_livecodebench_oracle.py",
+      "acceptance": [
+        "Correct, subtly incorrect and timeout fixtures match official grading; problem dates and requested IDs persist."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T07D",
+      "title": "EvalPlus official wrapper",
+      "gate": "G07",
+      "status": "todo",
+      "depends_on": [
+        "T07C"
+      ],
+      "requires_gates": [
+        "G05"
+      ],
+      "production_target": "src/stealthbench/benchmarks/evalplus.py",
+      "test_target": "tests/contract/test_evalplus_oracle.py",
+      "acceptance": [
+        "Pinned official extended-test outcomes match golden fixtures and accepted samples define pass@1."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T08A",
+      "title": "BFCL tool evaluation adapter",
+      "gate": "G08",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G05",
+        "G07"
+      ],
+      "production_target": "src/stealthbench/benchmarks/bfcl.py",
+      "test_target": "tests/contract/test_bfcl_oracle.py",
+      "acceptance": [
+        "Native and prompted modes remain separate; invalid, irrelevant and parallel calls match category oracles."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T08B",
+      "title": "RULER generation and grading adapter",
+      "gate": "G08",
+      "status": "todo",
+      "depends_on": [
+        "T08A"
+      ],
+      "requires_gates": [
+        "G05",
+        "G07"
+      ],
+      "production_target": "src/stealthbench/benchmarks/ruler.py",
+      "test_target": "tests/contract/test_ruler_oracle.py",
+      "acceptance": [
+        "Seeds and task versions reproduce cases; truncation or unsupported lengths cannot masquerade as intended context."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T09A",
+      "title": "Benchmark denominators and core index",
+      "gate": "G09",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G06",
+        "G07",
+        "G08"
+      ],
+      "production_target": "src/stealthbench/analysis/scoring.py",
+      "test_target": "tests/unit/test_score_oracles.py",
+      "acceptance": [
+        "Hand-computed category means and denominator cases match; incomplete core coverage has no headline index."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T09B",
+      "title": "Paired task-level statistical intervals",
+      "gate": "G09",
+      "status": "todo",
+      "depends_on": [
+        "T09A"
+      ],
+      "requires_gates": [
+        "G06",
+        "G07",
+        "G08"
+      ],
+      "production_target": "src/stealthbench/analysis/statistics.py",
+      "test_target": "tests/unit/test_statistics.py",
+      "acceptance": [
+        "Repeated observations cluster by task; seeded calculations and known cases agree; insufficient data stays explicit."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T09C",
+      "title": "Latency, throughput and usage summaries",
+      "gate": "G09",
+      "status": "todo",
+      "depends_on": [
+        "T09B"
+      ],
+      "requires_gates": [
+        "G06",
+        "G07",
+        "G08"
+      ],
+      "production_target": "src/stealthbench/analysis/performance.py",
+      "test_target": "tests/unit/test_performance.py",
+      "acceptance": [
+        "Synthetic traces distinguish first content from answer; chunks are not tokens; missing billing stays missing."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T10A",
+      "title": "Pinned OpenCode runner and model broker",
+      "gate": "G10",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G04",
+        "G07"
+      ],
+      "production_target": "src/stealthbench/agents/opencode.py",
+      "test_target": "tests/sandbox/test_agent_runner.py",
+      "acceptance": [
+        "Full-trajectory budgets, prompts, compaction, auxiliary usage and cancellation are captured; task containers cannot read credentials."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T10B",
+      "title": "SWE-bench agent and evaluator integration",
+      "gate": "G10",
+      "status": "todo",
+      "depends_on": [
+        "T10A"
+      ],
+      "requires_gates": [
+        "G04",
+        "G07"
+      ],
+      "production_target": "src/stealthbench/agents/swebench.py",
+      "test_target": "tests/contract/test_swebench_oracle.py",
+      "acceptance": [
+        "Known resolving and non-resolving patches match official grading in fresh pinned environments."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T10C",
+      "title": "Terminal-Bench agent and evaluator integration",
+      "gate": "G10",
+      "status": "todo",
+      "depends_on": [
+        "T10B"
+      ],
+      "requires_gates": [
+        "G04",
+        "G07"
+      ],
+      "production_target": "src/stealthbench/agents/terminalbench.py",
+      "test_target": "tests/contract/test_terminalbench_oracle.py",
+      "acceptance": [
+        "Known pass/fail artifacts match official grading; one trajectory remains one attempt; task images are pinned."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T11A",
+      "title": "Probe bank, baseline and tokenizer inventory",
+      "gate": "G11",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G04",
+        "G09"
+      ],
+      "production_target": "src/stealthbench/fingerprints/probes.py",
+      "test_target": "tests/unit/test_probe_manifest.py",
+      "acceptance": [
+        "Sixty versioned probes with three repeats and fixed baselines have unique IDs and reproducible manifests."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T11B",
+      "title": "Signature extraction and validity masks",
+      "gate": "G11",
+      "status": "todo",
+      "depends_on": [
+        "T11A"
+      ],
+      "requires_gates": [
+        "G04",
+        "G09"
+      ],
+      "production_target": "src/stealthbench/fingerprints/features.py",
+      "test_target": "tests/unit/test_fingerprint_validity.py",
+      "acceptance": [
+        "Missing counts, unstable repeats and content-dependent framing produce explicit invalidity or uncertainty."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T11C",
+      "title": "Ranked reference similarity reports",
+      "gate": "G11",
+      "status": "todo",
+      "depends_on": [
+        "T11B"
+      ],
+      "requires_gates": [
+        "G04",
+        "G09"
+      ],
+      "production_target": "src/stealthbench/fingerprints/similarity.py",
+      "test_target": "tests/unit/test_similarity.py",
+      "acceptance": [
+        "Shared tokenizer cases do not imply identical models; similarity never becomes probability; weak evidence abstains."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T12A",
+      "title": "Grouped holdouts and attribution classifier",
+      "gate": "G12",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G11"
+      ],
+      "production_target": "src/stealthbench/fingerprints/attribution.py",
+      "test_target": "tests/unit/test_attribution_splits.py",
+      "acceptance": [
+        "Source-observation leakage is rejected; unknown-family, later-time and route holdouts are distinct."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T12B",
+      "title": "Calibration, abstention and evidence gate",
+      "gate": "G12",
+      "status": "todo",
+      "depends_on": [
+        "T12A"
+      ],
+      "requires_gates": [
+        "G11"
+      ],
+      "production_target": "src/stealthbench/fingerprints/calibration.py",
+      "test_target": "tests/unit/test_identity_evidence.py",
+      "acceptance": [
+        "Frozen thresholds and sufficient held-out evidence are required for probabilities and separately for exact-version claims."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T12C",
+      "title": "Canary drift and reveal history",
+      "gate": "G12",
+      "status": "todo",
+      "depends_on": [
+        "T12B"
+      ],
+      "requires_gates": [
+        "G11"
+      ],
+      "production_target": "src/stealthbench/analysis/drift.py",
+      "test_target": "tests/unit/test_drift.py",
+      "acceptance": [
+        "Stable and shifted simulations obey declared detection rules; control-wide changes and reveals preserve history."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T13A",
+      "title": "Static model pages and comparisons",
+      "gate": "G13",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G09",
+        "G10",
+        "G12"
+      ],
+      "production_target": "src/stealthbench/reporting/site.py",
+      "test_target": "tests/integration/test_static_report.py",
+      "acceptance": [
+        "Complete, incomplete and unknown results render accurately with escaped content, provenance and observation windows."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T13B",
+      "title": "JSON/CSV exports and provenance links",
+      "gate": "G13",
+      "status": "todo",
+      "depends_on": [
+        "T13A"
+      ],
+      "requires_gates": [
+        "G09",
+        "G10",
+        "G12"
+      ],
+      "production_target": "src/stealthbench/reporting/exports.py",
+      "test_target": "tests/integration/test_report_exports.py",
+      "acceptance": [
+        "Counts round-trip; secrets, CSV formula injection and path traversal are blocked."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T13C",
+      "title": "Operational CLI and canary scheduling",
+      "gate": "G13",
+      "status": "todo",
+      "depends_on": [
+        "T13B"
+      ],
+      "requires_gates": [
+        "G09",
+        "G10",
+        "G12"
+      ],
+      "production_target": "src/stealthbench/runner/monitoring.py",
+      "test_target": "tests/integration/test_canary_schedule.py",
+      "acceptance": [
+        "Jobs are idempotent, observe caps and require configured live authorization; fixture mode runs offline."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T14A",
+      "title": "Fresh-install release and regression evidence",
+      "gate": "G14",
+      "status": "todo",
+      "depends_on": [],
+      "requires_gates": [
+        "G13"
+      ],
+      "production_target": "docs/operations.md",
+      "test_target": "tests/integration/test_release_workflow.py",
+      "acceptance": [
+        "Fresh install executes the whole offline workflow and required containment/recovery suites; artifact counts and full profiles are validated."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T14B",
+      "title": "Live readiness preflight",
+      "gate": "G14",
+      "status": "todo",
+      "depends_on": [
+        "T14A"
+      ],
+      "requires_gates": [
+        "G13"
+      ],
+      "production_target": "src/stealthbench/runner/preflight.py",
+      "test_target": "tests/integration/test_live_preflight.py",
+      "acceptance": [
+        "Credentials, authorization, caps, revisions, endpoint modes and actual runtime checks are mandatory before live dispatch."
+      ],
+      "execution_mode": "offline",
+      "evidence": null
+    },
+    {
+      "id": "T14C",
+      "title": "Capped live setup and pilot campaign",
+      "gate": "G14",
+      "status": "todo",
+      "depends_on": [
+        "T14B"
+      ],
+      "requires_gates": [
+        "G13"
+      ],
+      "production_target": "configs/pilot.json",
+      "test_target": "tests/live/test_campaign_smoke.py",
+      "acceptance": [
+        "Authorized setup and pilot artifacts record measured cost, coverage and protocol outcomes; no specific model accuracy is required."
+      ],
+      "execution_mode": "authorized_live",
+      "evidence": null
+    },
+    {
+      "id": "T14D",
+      "title": "Full-suite execution and final campaign report",
+      "gate": "G14",
+      "status": "todo",
+      "depends_on": [
+        "T14C"
+      ],
+      "requires_gates": [
+        "G13"
+      ],
+      "production_target": "configs/full.json",
+      "test_target": "tests/live/test_full_campaign_integrity.py",
+      "acceptance": [
+        "Authorized full splits have complete declared IDs and provenance; partial coverage and unvalidated attribution remain visibly qualified."
+      ],
+      "execution_mode": "authorized_live",
+      "evidence": null
+    }
+  ],
+  "gates": [
+    {
+      "id": "G00",
+      "status": "passed",
+      "requires_gates": [],
+      "required_tasks": [
+        "T00A",
+        "T00B",
+        "T00C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": [
+        {
+          "source_revision": "4f23898b0a15c24191265309374a8dfe302cd2b4325bc76e0418c65b2d5ed216",
+          "record": "implementation/evidence/G00/4f23898b0a15c24191265309374a8dfe302cd2b4325bc76e0418c65b2d5ed216/gate.json",
+          "commands": [
+            {
+              "command": "ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/unit tests/contract -q",
+              "exit_status": 0,
+              "collected": 92,
+              "passed": 92,
+              "skipped": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/integration tests/replay -q",
+              "exit_status": 0,
+              "collected": 14,
+              "passed": 14,
+              "skipped": 0
+            },
+            {
+              "command": "stealthbench bogus-command",
+              "exit_status": 2,
+              "expectation": "non-zero"
+            },
+            {
+              "command": "stealthbench manifest validate configs/offline-demo.json",
+              "exit_status": 3,
+              "expectation": "non-zero"
+            }
+          ],
+          "review_decision": "PASS",
+          "withdrawn_records": [
+            "4f23898b... first record, withdrawn: its test counts matched no reproducible run"
+          ]
+        },
+        {
+          "source_revision": "3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594",
+          "record": "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json",
+          "review_decision": "PASS",
+          "supersedes": "4f23898b0a15c24191265309374a8dfe302cd2b4325bc76e0418c65b2d5ed216",
+          "reason": "licensing demoted from acquisition gate to recorded fact (operator decision)",
+          "commands": [
+            {
+              "command": "ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/unit tests/contract -q",
+              "exit_status": 0,
+              "collected": 92,
+              "passed": 92,
+              "skipped": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/integration tests/replay -q",
+              "exit_status": 0,
+              "collected": 14,
+              "passed": 14,
+              "skipped": 0
+            },
+            {
+              "command": "stealthbench bogus-command",
+              "exit_status": 2,
+              "expectation": "non-zero"
+            },
+            {
+              "command": "stealthbench manifest validate configs/offline-demo.json",
+              "exit_status": 3,
+              "expectation": "non-zero"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G01",
+      "status": "passed",
+      "requires_gates": [
+        "G00"
+      ],
+      "required_tasks": [
+        "T01A",
+        "T01B",
+        "T01C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": [
+        {
+          "source_revision": "790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006",
+          "record": "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json",
+          "review_decision": "PASS",
+          "commands": [
+            {
+              "command": "ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/unit tests/contract -q",
+              "exit_status": 0,
+              "collected": 298,
+              "passed": 298,
+              "skipped": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/integration tests/replay -q",
+              "exit_status": 0,
+              "collected": 14,
+              "passed": 14,
+              "skipped": 0
+            },
+            {
+              "command": "stealthbench manifest validate configs/offline-demo.json",
+              "exit_status": 0
+            },
+            {
+              "command": "stealthbench manifest validate configs/full.json",
+              "exit_status": 0
+            },
+            {
+              "command": "stealthbench run configs/offline-demo.json",
+              "exit_status": 3,
+              "expectation": "non-zero (G04 not landed)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G02",
+      "status": "passed",
+      "requires_gates": [
+        "G01"
+      ],
+      "required_tasks": [
+        "T02A",
+        "T02B",
+        "T02C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": [
+        {
+          "source_revision": "4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35",
+          "record": "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json",
+          "review_decision": "PASS",
+          "supersedes": "b57079bdaf26ac974899269b20d5a273e9a8c99c2409ca424ffbb11364353606",
+          "reason": "13 review defects fixed; one previously recorded mutation check was shown not to reproduce and is now reported as such",
+          "commands": [
+            {
+              "command": "ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/unit tests/contract -q",
+              "exit_status": 0,
+              "collected": 312,
+              "passed": 312,
+              "skipped": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/integration tests/replay -q",
+              "exit_status": 0,
+              "collected": 125,
+              "passed": 125,
+              "skipped": 0
+            },
+            {
+              "command": "stealthbench manifest validate configs/offline-demo.json",
+              "exit_status": 0
+            },
+            {
+              "command": "stealthbench run configs/offline-demo.json",
+              "exit_status": 3,
+              "expectation": "non-zero (G04 not landed)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G03",
+      "status": "not_run",
+      "requires_gates": [
+        "G02"
+      ],
+      "required_tasks": [
+        "T03A",
+        "T03B",
+        "T03C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G04",
+      "status": "not_run",
+      "requires_gates": [
+        "G03"
+      ],
+      "required_tasks": [
+        "T04A",
+        "T04B",
+        "T04C",
+        "T04D"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G05",
+      "status": "not_run",
+      "requires_gates": [
+        "G04"
+      ],
+      "required_tasks": [
+        "T05A",
+        "T05B",
+        "T05C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G06",
+      "status": "not_run",
+      "requires_gates": [
+        "G05"
+      ],
+      "required_tasks": [
+        "T06A",
+        "T06B"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G07",
+      "status": "not_run",
+      "requires_gates": [
+        "G05"
+      ],
+      "required_tasks": [
+        "T07A",
+        "T07B",
+        "T07C",
+        "T07D"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G08",
+      "status": "not_run",
+      "requires_gates": [
+        "G05",
+        "G07"
+      ],
+      "required_tasks": [
+        "T08A",
+        "T08B"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G09",
+      "status": "not_run",
+      "requires_gates": [
+        "G06",
+        "G07",
+        "G08"
+      ],
+      "required_tasks": [
+        "T09A",
+        "T09B",
+        "T09C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G10",
+      "status": "not_run",
+      "requires_gates": [
+        "G04",
+        "G07"
+      ],
+      "required_tasks": [
+        "T10A",
+        "T10B",
+        "T10C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G11",
+      "status": "not_run",
+      "requires_gates": [
+        "G04",
+        "G09"
+      ],
+      "required_tasks": [
+        "T11A",
+        "T11B",
+        "T11C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G12",
+      "status": "not_run",
+      "requires_gates": [
+        "G11"
+      ],
+      "required_tasks": [
+        "T12A",
+        "T12B",
+        "T12C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G13",
+      "status": "not_run",
+      "requires_gates": [
+        "G09",
+        "G10",
+        "G12"
+      ],
+      "required_tasks": [
+        "T13A",
+        "T13B",
+        "T13C"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    },
+    {
+      "id": "G14",
+      "status": "not_run",
+      "requires_gates": [
+        "G13"
+      ],
+      "required_tasks": [
+        "T14A",
+        "T14B",
+        "T14C",
+        "T14D"
+      ],
+      "specification": "IMPLEMENTATION_PLAN.md",
+      "evidence": []
+    }
+  ],
+  "note": "G14 has distinct software, live-readiness, setup, pilot and full-run evidence. Report software release readiness independently if live inputs are blocked. Probability and exact-version publication also require G12 empirical evidence; software tests alone cannot establish identity accuracy."
+}
