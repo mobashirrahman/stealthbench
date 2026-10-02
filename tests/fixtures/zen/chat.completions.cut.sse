@@ -1,0 +1,4 @@
+data: {"id": "chatcmpl-sse-0006", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-sse-0006", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"content": "The answer begins here and then"}, "finish_reason": null}]}
+

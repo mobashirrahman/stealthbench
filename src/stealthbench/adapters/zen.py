@@ -37,9 +37,9 @@ from stealthbench.adapters.base import (
     UnsupportedSetting,
     check_requested_settings,
     safe_failure,
+    strict_flag,
 )
 from stealthbench.schemas.campaign import Capabilities
-from stealthbench.schemas.hashing import content_digest
 from stealthbench.schemas.results import (
     DeliveryStatus,
     FinishStatus,
@@ -68,14 +68,17 @@ _FINISH_REASONS: Final[dict[str, FinishStatus]] = {
 }
 
 
-def map_finish_reason(reason: str | None) -> FinishStatus:
+def map_finish_reason(reason: str | None) -> FinishStatus | None:
     """Map a gateway finish reason onto the frozen vocabulary.
 
-    An unrecognised reason is not treated as ``stop``. Guessing success is how a
-    truncated generation ends up counted as a completed answer.
+    An absent reason stays absent. ``None`` means the endpoint never said how the
+    generation ended, and reporting that as ``stop`` would turn a cut-off stream
+    into a counted success -- the exact failure this function exists to prevent.
+
+    An unrecognised reason becomes ``error`` rather than a success reason either.
     """
     if reason is None:
-        return "stop"
+        return None
     return _FINISH_REASONS.get(reason.lower(), "error")
 
 
@@ -99,7 +102,11 @@ def map_http_status(status: int | None) -> FailureKind | None:
 
 
 def normalize_catalog(
-    payload: Any, *, source: str = ZEN_BASE_URL, observed_at: str | None = None
+    payload: Any,
+    *,
+    source: str = ZEN_BASE_URL,
+    observed_at: str | None = None,
+    extra_secrets: frozenset[str] = frozenset(),
 ) -> CatalogSnapshot:
     """Normalize a catalog response into a snapshot.
 
@@ -122,7 +129,7 @@ def normalize_catalog(
     if isinstance(models, list):
         normalizer = _CatalogNormalizer()
         for item in models:
-            entry = normalizer.entry(item)
+            entry = normalizer.entry(item, extra_secrets=extra_secrets)
             if entry is not None:
                 entries.append(entry)
 
@@ -131,7 +138,7 @@ def normalize_catalog(
             source=source,
             observed_at=observed_at,
             entries=tuple(entries),
-            raw=_stringable(raw),
+            raw=redact_mapping(_stringable(raw), extra_secrets=extra_secrets),
         )
     except ValidationError:
         # Duplicate aliases in a live catalog are a real observation, not a crash.
@@ -144,14 +151,19 @@ def normalize_catalog(
             seen.add(entry.alias)
             unique.append(entry)
         return CatalogSnapshot(
-            source=source, observed_at=observed_at, entries=tuple(unique), raw=_stringable(raw)
+            source=source,
+            observed_at=observed_at,
+            entries=tuple(unique),
+            raw=redact_mapping(_stringable(raw), extra_secrets=extra_secrets),
         )
 
 
 class _CatalogNormalizer:
     """Turns one raw catalog record into a ``CatalogEntry`` without guessing."""
 
-    def entry(self, item: Any) -> CatalogEntry | None:
+    def entry(
+        self, item: Any, *, extra_secrets: frozenset[str] = frozenset()
+    ) -> CatalogEntry | None:
         if not isinstance(item, Mapping):
             return None
         alias = item.get("id") or item.get("alias") or item.get("slug")
@@ -161,31 +173,30 @@ class _CatalogNormalizer:
         caps = item.get("capabilities")
         caps_map: Mapping[str, Any] = caps if isinstance(caps, Mapping) else {}
         capabilities = Capabilities(
-            streaming=_flag(caps_map.get("streaming"), item.get("supports_streaming")),
-            tool_calls=_flag(caps_map.get("tool_calls"), item.get("supports_tools")),
-            reasoning=_flag(caps_map.get("reasoning"), item.get("supports_reasoning")),
-            usage_reporting=_flag(caps_map.get("usage_reporting"), item.get("reports_usage")),
-            logprobs=_flag(caps_map.get("logprobs"), item.get("supports_logprobs")),
+            streaming=strict_flag(caps_map.get("streaming"), item.get("supports_streaming")),
+            tool_calls=strict_flag(caps_map.get("tool_calls"), item.get("supports_tools")),
+            reasoning=strict_flag(caps_map.get("reasoning"), item.get("supports_reasoning")),
+            usage_reporting=strict_flag(caps_map.get("usage_reporting"), item.get("reports_usage")),
+            logprobs=strict_flag(caps_map.get("logprobs"), item.get("supports_logprobs")),
         )
         context = item.get("context_window", item.get("context_length", item.get("max_context")))
+        raw_entry = _stringable(item)
         return CatalogEntry(
             alias=alias.strip(),
-            route=str(item.get("route", "zen")),
+            route=_route_label(item.get("route")),
             display_name=_opt_str(item.get("display_name", item.get("name"))),
             provider=_opt_str(item.get("provider", item.get("owned_by"))),
             family=_opt_str(item.get("family")),
-            context_window=context if isinstance(context, int) and context > 0 else None,
+            # A bool is an int in Python; `True` as a context window would be stored
+            # as 1 token, which is a fabricated measurement.
+            context_window=(
+                context
+                if isinstance(context, int) and not isinstance(context, bool) and context > 0
+                else None
+            ),
             capabilities=capabilities,
-            raw=_stringable(item),
+            raw=redact_mapping(raw_entry, extra_secrets=extra_secrets),
         )
-
-
-def _flag(*candidates: Any) -> bool:
-    """First candidate that is a real boolean wins; anything else is False."""
-    for value in candidates:
-        if isinstance(value, bool):
-            return value
-    return False
 
 
 def _opt_str(value: Any) -> str | None:
@@ -290,7 +301,7 @@ def extract_tool_calls(payload: Mapping[str, Any]) -> tuple[dict[str, Any], ...]
     return tuple(dict(call) for call in calls if isinstance(call, Mapping))
 
 
-def finish_reason_of(payload: Mapping[str, Any]) -> FinishStatus:
+def finish_reason_of(payload: Mapping[str, Any]) -> FinishStatus | None:
     choices = payload.get("choices")
     if not isinstance(choices, Sequence) or not choices:
         return "error"
@@ -300,11 +311,20 @@ def finish_reason_of(payload: Mapping[str, Any]) -> FinishStatus:
     return map_finish_reason(first.get("finish_reason"))
 
 
-def effective_settings_of(payload: Mapping[str, Any], requested: ModelRequest) -> dict[str, Any]:
+def effective_settings_of(
+    payload: Mapping[str, Any],
+    requested: ModelRequest,
+    *,
+    extra_secrets: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     """Record what the endpoint says it did, separately from what was requested.
 
     A gateway that reports a different temperature actually used is evidence, and
     conflating the two would make a run irreproducible.
+
+    Redaction happens here rather than at each call site: a gateway echoing a
+    request that carried an authorization header would otherwise write the
+    credential straight into the artifact.
     """
     effective: dict[str, Any] = {
         "requested": {
@@ -317,11 +337,11 @@ def effective_settings_of(payload: Mapping[str, Any], requested: ModelRequest) -
     }
     echoed = payload.get("stealthbench_effective")
     if isinstance(echoed, Mapping):
-        effective["reported"] = dict(echoed)
+        effective["reported"] = redact_mapping(dict(echoed), extra_secrets=extra_secrets)
     model = payload.get("model")
     if isinstance(model, str):
-        effective["reported_model"] = model
-    return effective
+        effective["reported_model"] = redact_text(model, extra_secrets=extra_secrets)
+    return redact_mapping(effective, extra_secrets=extra_secrets)
 
 
 class ZenAdapter(ProviderAdapter):
@@ -356,14 +376,27 @@ class ZenAdapter(ProviderAdapter):
         )
 
     @classmethod
-    def from_path(cls, path: Path) -> ZenAdapter:
+    def from_path(cls, path: Path, *, extra_secrets: frozenset[str] = frozenset()) -> ZenAdapter:
+        """Load a recorded transcript.
+
+        The catalog is taken from the recorded ``GET /v1/models`` response body when
+        one is present, so a wire capture is replayed as captured instead of relying
+        on a separately maintained summary of it.
+
+        ``extra_secrets`` must be supplied by the caller when the capture contains a
+        credential-shaped value; there is no way to redact what was never declared.
+        """
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(raw, Mapping):
             raise ValueError(f"{path} must contain a JSON object")
+        catalog = raw.get("catalog")
+        if catalog is None:
+            catalog = _catalog_from_requests(raw.get("requests"))
         return cls(
-            catalog_payload=raw.get("catalog"),
+            catalog_payload=catalog,
             exchanges=raw.get("exchanges"),
             catalog_source=str(raw.get("catalog_source", ZEN_BASE_URL)),
+            extra_secrets=extra_secrets,
         )
 
     def discover(self) -> CatalogSnapshot:
@@ -373,21 +406,60 @@ class ZenAdapter(ProviderAdapter):
         """
         if self._catalog_payload is None:
             return CatalogSnapshot(source=self.catalog_source, raw={})
-        return normalize_catalog(self._catalog_payload, source=self.catalog_source)
+        return normalize_catalog(
+            self._catalog_payload,
+            source=self.catalog_source,
+            extra_secrets=self.extra_secrets,
+        )
 
     def _record_for(self, sample_key: SampleKey) -> Mapping[str, Any] | None:
-        for candidate in self._candidate_keys(sample_key):
+        allow_unqualified = self._unqualified_keys_allowed()
+        for candidate in self._candidate_keys(sample_key, allow_unqualified=allow_unqualified):
             record = self._exchanges.get(candidate)
             if record is not None:
                 return record
         return None
 
+    def _aliases_are_unambiguous(self) -> bool:
+        """Whether an endpoint-unqualified transcript key can mean only one alias.
+
+        A capture keyed ``ifeval::item-1`` against a catalog listing three aliases
+        cannot say which endpoint produced the answer. Replaying it for each of them
+        would record accepted samples for endpoint observations never dispatched.
+        """
+        payload = self._catalog_payload
+        if not isinstance(payload, Mapping):
+            return True
+        models = payload.get("data", payload.get("models"))
+        if not isinstance(models, Sequence) or isinstance(models, (str, bytes)):
+            return True
+        aliases = {
+            item.get("id")
+            for item in models
+            if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+        }
+        return len(aliases) <= 1
+
+    def _unqualified_keys_allowed(self) -> bool:
+        return self._aliases_are_unambiguous()
+
     @staticmethod
-    def _candidate_keys(sample_key: SampleKey) -> Iterator[str]:
-        yield sample_key.task_id
+    def _candidate_keys(sample_key: SampleKey, *, allow_unqualified: bool = True) -> Iterator[str]:
+        """Transcript lookup keys, most specific first.
+
+        A record pinned to a repeat must win over a generic one, otherwise every
+        repeat replays the same response and a repeat measurement collapses into a
+        duplicate.
+
+        The endpoint-unqualified keys are only offered when the capture has a single
+        alias. With several aliases in the catalog they are ambiguous, and matching
+        them would replay one capture as a sample for every endpoint in the campaign.
+        """
+        yield f"{sample_key.endpoint_id}:{sample_key.task_id}#r{sample_key.repeat_id}"
         yield f"{sample_key.task_id}#r{sample_key.repeat_id}"
         yield f"{sample_key.endpoint_id}:{sample_key.task_id}"
-        yield f"{sample_key.endpoint_id}:{sample_key.task_id}#r{sample_key.repeat_id}"
+        if allow_unqualified:
+            yield sample_key.task_id
 
     def complete(
         self,
@@ -407,6 +479,7 @@ class ZenAdapter(ProviderAdapter):
         )
 
         record = self._record_for(sample_key)
+        unsupported = unsupported + _recorded_unsupported(record, request)
         if record is None:
             return AdapterResult(
                 failure=TransportFailure(
@@ -472,7 +545,9 @@ class ZenAdapter(ProviderAdapter):
             delivery_status=DeliveryStatus.ACCEPTED,
             response=text or "",
             usage=usage_from_response(payload),
-            effective_settings=effective_settings_of(payload, request),
+            effective_settings=effective_settings_of(
+                payload, request, extra_secrets=self.extra_secrets
+            ),
             finish_status=finish_reason_of(payload),
             manifest_hash=manifest_hash,
             redacted_provider_metadata=redact_mapping(metadata, extra_secrets=self.extra_secrets),
@@ -482,6 +557,159 @@ class ZenAdapter(ProviderAdapter):
             unsupported=unsupported,
             effective_settings=result.effective_settings,
         )
+
+    def stream(
+        self,
+        *,
+        sample_key: SampleKey,
+        request: ModelRequest,
+        prompt_hash: str,
+        manifest_hash: str | None = None,
+        attempt_id: str | None = None,
+        attempt_number: int = 1,
+        capabilities: Capabilities | None = None,
+    ) -> AdapterResult:
+        """Replay a recorded Zen SSE stream.
+
+        The route label is ``zen``, so a gateway stream is distinguishable from a
+        fixture stream of the same bytes.
+        """
+        from stealthbench.adapters.streaming import parse_stream
+
+        attempt = attempt_id or f"{sample_key.task_id}-r{sample_key.repeat_id}-a{attempt_number}"
+        unsupported: tuple[UnsupportedSetting, ...] = check_requested_settings(
+            request, capabilities or self._capabilities, stream=True
+        )
+        record = self._record_for(sample_key)
+        if record is None:
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind.NO_FIXTURE,
+                    f"no recorded Zen stream for {sample_key.task_id}",
+                )
+            )
+        status = record.get("http_status")
+        failure_kind = map_http_status(status if isinstance(status, int) else None)
+        if failure_kind is not None:
+            body = record.get("body")
+            return AdapterResult(
+                failure=safe_failure(
+                    failure_kind,
+                    _detail_of(record),
+                    http_status=status if isinstance(status, int) else None,
+                    body=body if isinstance(body, Mapping) else None,
+                    extra_secrets=self.extra_secrets,
+                )
+            )
+        frames = record.get("stream_frames")
+        if not isinstance(frames, Sequence) or not frames:
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind.UNSUPPORTED_SETTING,
+                    "recorded Zen exchange carries no stream frames",
+                    extra_secrets=self.extra_secrets,
+                )
+            )
+        if capabilities is not None and not capabilities.streaming:
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind.UNSUPPORTED_SETTING,
+                    "streaming was requested but this endpoint does not advertise it",
+                    extra_secrets=self.extra_secrets,
+                )
+            )
+        raw = b"".join(
+            b"data: " + json.dumps(dict(frame), ensure_ascii=False).encode("utf-8") + b"\n\n"
+            for frame in frames
+            if isinstance(frame, Mapping)
+        )
+        # A capture whose connection died never sent the sentinel; replaying it as
+        # terminated would report a truncated answer as a completed one.
+        if record.get("stream_terminated", True) is not False:
+            raw += b"data: [DONE]\n\n"
+        outcome, _assembly = parse_stream(
+            [raw],
+            sample_key=sample_key,
+            attempt_id=attempt,
+            attempt_number=attempt_number,
+            manifest_hash=manifest_hash,
+            route=self.route,
+            adapter="zen",
+            extra_secrets=self.extra_secrets,
+        )
+        return AdapterResult(
+            result=outcome.result,
+            failure=outcome.failure,
+            unsupported=unsupported + _recorded_unsupported(record, request),
+            effective_settings=outcome.effective_settings,
+        )
+
+
+def _recorded_unsupported(
+    record: Mapping[str, Any] | None, request: ModelRequest
+) -> tuple[UnsupportedSetting, ...]:
+    """Settings the recorded gateway declined, named with what was asked for.
+
+    The capture is the only evidence of what a gateway will not do, so it is read
+    here rather than inferred from a capability that was never advertised.
+    """
+    if record is None:
+        return ()
+    names = record.get("unsupported_settings")
+    if not isinstance(names, Sequence) or isinstance(names, (str, bytes)):
+        return ()
+    requested = {
+        "stream": False,
+        "stop": request.stop,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "max_output_tokens": request.max_output_tokens,
+    }
+    return tuple(
+        UnsupportedSetting(
+            setting=str(name),
+            requested=requested.get(str(name)),
+            reason="the recorded gateway does not offer this setting",
+        )
+        for name in names
+        if isinstance(name, str)
+    )
+
+
+def _route_label(value: Any) -> str:
+    """The route a record names, or the default when it names none."""
+    return value.strip() if isinstance(value, str) and value.strip() else "zen"
+
+
+def _catalog_from_requests(requests: Any) -> Any:
+    """Extract the catalog body from recorded requests, if the capture has any.
+
+    A wire capture records ``GET /v1/models`` as one entry among many; replaying the
+    recorded body is what makes discovery-from-fixtures evidence rather than a
+    convenience. The first successful models response wins; the status is checked
+    so an error response is never mistaken for an empty catalog.
+    """
+    if not isinstance(requests, Sequence) or isinstance(requests, (str, bytes)):
+        return None
+    for entry in requests:
+        if not isinstance(entry, Mapping):
+            continue
+        path = entry.get("path")
+        if not isinstance(path, str):
+            continue
+        # A capture records whatever the client requested, query string and all.
+        bare = path.split("?", 1)[0].rstrip("/")
+        if not bare.endswith("/models"):
+            continue
+        status = entry.get("status")
+        if status is not None and (
+            not isinstance(status, int) or isinstance(status, bool) or not 200 <= status < 300
+        ):
+            continue
+        body = entry.get("body")
+        if isinstance(body, Mapping):
+            return body
+    return None
 
 
 def _detail_of(record: Mapping[str, Any]) -> str:
@@ -513,13 +741,12 @@ def _retry_after(record: Mapping[str, Any]) -> float | None:
 
 
 def catalog_snapshot_digest(snapshot: CatalogSnapshot) -> str:
-    """A stable digest for storing the observed catalog alongside a campaign."""
-    return content_digest(
-        {
-            "source": snapshot.source,
-            "entries": [entry.model_dump(mode="json") for entry in snapshot.entries],
-        }
-    )
+    """A stable digest for storing the observed catalog alongside a campaign.
+
+    It delegates to the snapshot so the two can never disagree: a campaign that
+    verifies one while storing the other could never be checked.
+    """
+    return snapshot.digest()
 
 
 __all__: Sequence[str] = (

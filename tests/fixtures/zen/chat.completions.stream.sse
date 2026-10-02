@@ -1,0 +1,10 @@
+data: {"id": "chatcmpl-sse-0004", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-sse-0004", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"content": "Paris "}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-sse-0004", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"content": "is the capital of France."}, "finish_reason": "stop"}]}
+
+data: {"id": "chatcmpl-sse-0004", "model": "zen-fast-alias", "choices": [], "usage": {"prompt_tokens": 24, "completion_tokens": 7, "total_tokens": 31}}
+
+data: [DONE]
+

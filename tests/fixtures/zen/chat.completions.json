@@ -1,0 +1,274 @@
+{
+  "schema_version": "stealthbench/transcript/1",
+  "description": "Recorded HTTP exchange for POST /v1/chat/completions against a Zen gateway. Field names and status codes follow the OpenAI-compatible wire format. No real credential appears: the auth header is recorded as a recognisable canary.",
+  "catalog_source": "https://api.zen.example/v1/models",
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "req-catalog-0001"
+      },
+      "body": {
+        "object": "list",
+        "data": [
+          {
+            "id": "zen-fast-alias",
+            "object": "model",
+            "owned_by": "zen",
+            "created": 1735689600,
+            "capabilities": {
+              "streaming": true,
+              "tool_calls": false,
+              "usage_reporting": true
+            }
+          },
+          {
+            "id": "zen-reason-alias",
+            "object": "model",
+            "owned_by": "zen",
+            "created": 1735689600,
+            "capabilities": {
+              "streaming": true,
+              "reasoning": true
+            }
+          },
+          {
+            "id": "zen-legacy-alias",
+            "object": "model",
+            "owned_by": "zen",
+            "created": 1735689600
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "authorization": "Bearer sk-canary-transcript-0123456789abcdef",
+        "x-request-id": "req-chat-0002"
+      },
+      "body": {
+        "id": "chatcmpl-transcript-0002",
+        "object": "chat.completion",
+        "model": "zen-fast-alias",
+        "system_fingerprint": "fp_zenfast",
+        "stealthbench_effective": {
+          "temperature": 0.7,
+          "max_output_tokens": 64,
+          "echoed_authorization": "Bearer sk-canary-transcript-0123456789abcdef"
+        },
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Paris is the capital of France."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 24,
+          "completion_tokens": 7,
+          "total_tokens": 31
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "status": 401,
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "req-chat-0003"
+      },
+      "body": {
+        "error": {
+          "message": "Incorrect API key provided: sk-canary-transcript-0123456789abcdef.",
+          "type": "invalid_request_error",
+          "code": "invalid_api_key"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "retry-after": "3"
+      },
+      "body": {
+        "error": {
+          "message": "Rate limit reached for requests.",
+          "type": "rate_limit_error"
+        }
+      }
+    }
+  ],
+  "exchanges": {
+    "zen-fast-alias:ifeval::capital-of-france": {
+      "http_status": 200,
+      "headers": {
+        "x-request-id": "req-chat-0002"
+      },
+      "json": {
+        "id": "chatcmpl-transcript-0002",
+        "model": "zen-fast-alias",
+        "system_fingerprint": "fp_zenfast",
+        "stealthbench_effective": {
+          "temperature": 0.7,
+          "max_output_tokens": 64,
+          "echoed_authorization": "Bearer sk-canary-transcript-0123456789abcdef"
+        },
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Paris is the capital of France."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 24,
+          "completion_tokens": 7,
+          "total_tokens": 31
+        }
+      }
+    },
+    "zen-fast-alias:ifeval::capital-of-france#r2": {
+      "http_status": 200,
+      "headers": {
+        "x-request-id": "req-chat-0002b"
+      },
+      "json": {
+        "id": "chatcmpl-transcript-0002b",
+        "model": "zen-fast-alias",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Paris."
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 24,
+          "completion_tokens": 1
+        }
+      }
+    },
+    "zen-fast-alias:ifeval::forbidden-keyword": {
+      "http_status": 401,
+      "headers": {
+        "x-request-id": "req-chat-0003"
+      },
+      "body": {
+        "error": {
+          "message": "Incorrect API key provided: sk-canary-transcript-0123456789abcdef.",
+          "type": "invalid_request_error",
+          "code": "invalid_api_key"
+        }
+      }
+    },
+    "zen-fast-alias:ifeval::rate-limited": {
+      "http_status": 429,
+      "headers": {
+        "retry-after": "3"
+      },
+      "body": {
+        "error": {
+          "message": "Rate limit reached for requests.",
+          "type": "rate_limit_error"
+        }
+      }
+    },
+    "zen-fast-alias:ifeval::streamed-answer": {
+      "http_status": 200,
+      "stream_frames": [
+        {
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant"
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "content": "Paris "
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "content": "is the capital of France."
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        },
+        {
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 24,
+            "completion_tokens": 7
+          }
+        }
+      ]
+    },
+    "zen-fast-alias:ifeval::cut-answer": {
+      "http_status": 200,
+      "stream_terminated": false,
+      "stream_frames": [
+        {
+          "id": "chatcmpl-sse-0006",
+          "model": "zen-fast-alias",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant"
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-sse-0006",
+          "model": "zen-fast-alias",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "content": "The answer begins here and then"
+              },
+              "finish_reason": null
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

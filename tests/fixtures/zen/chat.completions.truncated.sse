@@ -1,0 +1,6 @@
+data: {"id": "chatcmpl-sse-0005", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"content": "The quick brown fox"}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-sse-0005", "model": "zen-fast-alias", "choices": [{"index": 0, "delta": {"content": " jumps over the lazy"}, "finish_reason": "length"}]}
+
+data: [DONE]
+

@@ -379,12 +379,20 @@ def test_the_base_stream_method_refuses_rather_than_faking_a_stream() -> None:
     assert "must not be labelled as streamed" in outcome.failure.detail
 
 
-def test_unknown_settings_are_reported() -> None:
-    unsupported = check_requested_settings(request_(), FULL_CAPABILITIES)
-    assert all(
-        item.setting in {"stop", "temperature", "top_p", "max_output_tokens"}
-        for item in unsupported
-    )
+def test_a_fully_capable_endpoint_reports_nothing_unsupported() -> None:
+    """A supported setting produces no complaint; the empty result is the assertion.
+
+    This replaces a test that asserted ``all(...)`` over a tuple that is always
+    empty, so it passed even when the check was stubbed out entirely.
+    """
+    assert check_requested_settings(request_(), FULL_CAPABILITIES) == ()
+
+
+def test_a_requested_setting_the_endpoint_lacks_is_named() -> None:
+    reported = check_requested_settings(request_(), NO_CAPABILITIES, stream=True)
+    assert [item.setting for item in reported] == ["stream"]
+    assert reported[0].requested is True
+    assert "does not advertise" in reported[0].reason
 
 
 # ---------------------------------------------------------------------------
@@ -478,11 +486,20 @@ def test_duplicate_catalog_aliases_are_rejected() -> None:
 
 
 def test_a_catalog_snapshot_is_digested_for_provenance() -> None:
-    snapshot = FixtureTransport(
+    """Determinism against a *rebuilt* snapshot, not a self-comparison."""
+    first = FixtureTransport(
         bundle(catalog={"models": [{"id": "alpha", "capabilities": {}}]})
     ).discover()
-    assert snapshot.digest() == snapshot.digest()
-    assert len(snapshot.digest()) == 64
+    rebuilt = FixtureTransport(
+        bundle(catalog={"models": [{"id": "alpha", "capabilities": {}}]})
+    ).discover()
+    assert first.digest() == rebuilt.digest()
+    assert len(first.digest()) == 64
+
+    changed = FixtureTransport(
+        bundle(catalog={"models": [{"id": "alpha", "capabilities": {"streaming": True}}]})
+    ).discover()
+    assert changed.digest() != first.digest(), "a capability change must change the digest"
 
 
 def test_a_catalog_digest_changes_when_the_catalog_changes() -> None:
@@ -542,7 +559,13 @@ def test_a_recorded_error_body_is_redacted() -> None:
     assert CANARY not in json.dumps(outcome.failure.body)
 
 
-def test_a_credential_named_header_is_redacted_even_unrecognised() -> None:
+@pytest.mark.parametrize(
+    "header", ["Authorization", "x-api-key", "Proxy-Authorization", "Cookie", "set-cookie"]
+)
+def test_a_credential_named_header_is_redacted_regardless_of_content(header: str) -> None:
+    """A gateway echoing a credential in a known header name must not survive."""
+    from stealthbench.storage.events import REDACTED
+
     transport = FixtureTransport(
         bundle(
             exchanges=[
@@ -553,7 +576,9 @@ def test_a_credential_named_header_is_redacted_even_unrecognised() -> None:
                     "outcome": "error",
                     "failure_kind": "server_error",
                     "http_status": 500,
-                    "error_body": {"headers": {"x-custom-auth": "opaque-value"}},
+                    "error_body": {
+                        "headers": {header: f"opaque-{CANARY}", "x-request-id": "abc123"}
+                    },
                 }
             ]
         )
@@ -561,7 +586,34 @@ def test_a_credential_named_header_is_redacted_even_unrecognised() -> None:
     outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
     assert outcome.failure is not None
     assert outcome.failure.body is not None
-    assert outcome.failure.body["headers"]["x-api-key"] if False else True
+    headers = outcome.failure.body["headers"]
+    assert headers[header] == REDACTED, f"{header} must be redacted"
+    assert CANARY not in json.dumps(outcome.failure.body)
+    assert headers["x-request-id"] == "abc123", "ordinary headers stay readable"
+
+
+def test_an_unrecognised_header_name_is_not_treated_as_a_credential_header() -> None:
+    """Only the declared header set is defused; guessing would destroy diagnostics."""
+    transport = FixtureTransport(
+        bundle(
+            exchanges=[
+                {
+                    "endpoint_id": "fixture-a",
+                    "benchmark_id": "ifeval",
+                    "item_id": "syn-if-001",
+                    "outcome": "error",
+                    "failure_kind": "server_error",
+                    "http_status": 500,
+                    "error_body": {"headers": {"x-custom-auth": "visible-value"}},
+                }
+            ]
+        )
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.body is not None
+    body = outcome.failure.body["headers"]["x-custom-auth"]
+    assert body == "visible-value"
 
 
 # ---------------------------------------------------------------------------
@@ -752,3 +804,377 @@ def test_a_recorded_failure_detail_is_redacted_not_just_the_body() -> None:
     assert CANARY not in outcome.failure.detail
     assert CANARY not in json.dumps(outcome.to_dict())
     assert CANARY not in json.dumps(outcome.failure.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the G03 review findings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", ["false", "no", "0", "yes", 1, 0, 1.0, "", None, [], {}])
+def test_a_string_or_number_capability_is_never_reported_as_supported(raw: object) -> None:
+    """Defect: bool("false") is True, so a catalog could claim support it never had."""
+    snapshot = FixtureTransport(
+        bundle(catalog={"models": [{"id": "odd", "capabilities": {"streaming": raw}}]})
+    ).discover()
+    entry = snapshot.get("odd")
+    assert entry is not None
+    assert entry.capabilities.streaming is False, f"{raw!r} must not become True"
+
+
+@pytest.mark.parametrize("raw", [True, False])
+def test_a_real_boolean_capability_is_honoured(raw: bool) -> None:
+    snapshot = FixtureTransport(
+        bundle(catalog={"models": [{"id": "flag", "capabilities": {"streaming": raw}}]})
+    ).discover()
+    entry = snapshot.get("flag")
+    assert entry is not None
+    assert entry.capabilities.streaming is raw
+
+
+@pytest.mark.parametrize("value", [True, False, "5", 3.9, -5, [1], "five", {"n": 1}, None])
+def test_junk_token_values_stay_absent_rather_than_becoming_numbers(value: object) -> None:
+    """Defect: coercion turned `true` into one billed input token and raised on other junk."""
+    transport = FixtureTransport(
+        bundle(
+            exchanges=[
+                {
+                    "endpoint_id": "fixture-a",
+                    "benchmark_id": "ifeval",
+                    "item_id": "syn-if-001",
+                    "response": "x",
+                    "usage": {"input_tokens": value},
+                }
+            ]
+        )
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None, "junk usage must not raise out of complete()"
+    assert outcome.result.usage.input_tokens is None
+
+
+def test_a_reported_zero_token_count_is_still_kept() -> None:
+    transport = FixtureTransport(
+        bundle(
+            exchanges=[
+                {
+                    "endpoint_id": "fixture-a",
+                    "benchmark_id": "ifeval",
+                    "item_id": "syn-if-001",
+                    "response": "x",
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                }
+            ]
+        )
+    )
+    usage = transport.complete(
+        sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH
+    ).result.usage
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+
+
+def test_a_credential_in_a_tool_call_argument_is_redacted() -> None:
+    """Defect: fixture tool calls were stored verbatim inside redacted_provider_metadata."""
+    transport = FixtureTransport(
+        bundle(
+            exchanges=[
+                {
+                    "endpoint_id": "fixture-a",
+                    "benchmark_id": "bfcl",
+                    "item_id": "call-1",
+                    "response": "",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "tool_calls": [{"name": "fetch", "arguments": f'{{"key":"{CANARY}"}}'}],
+                }
+            ]
+        ),
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = transport.complete(
+        sample_key=key("call-1", benchmark="bfcl"),
+        request=request_(),
+        prompt_hash=PROMPT_HASH,
+    )
+    assert CANARY not in json.dumps(outcome.to_dict())
+
+
+def test_a_credential_in_effective_settings_is_redacted() -> None:
+    """Defect: effective settings were serialized without redaction on both adapters."""
+    transport = FixtureTransport(
+        bundle(
+            exchanges=[
+                {
+                    "endpoint_id": "fixture-a",
+                    "benchmark_id": "ifeval",
+                    "item_id": "syn-if-001",
+                    "response": "x",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "effective_settings": {"echoed": CANARY, "temperature": 0.0},
+                }
+            ]
+        ),
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+    assert outcome.result is not None
+    assert outcome.result.effective_settings["temperature"] == 0.0
+
+
+def test_a_credential_in_a_catalog_raw_record_is_redacted() -> None:
+    """Defect: CatalogEntry.raw and the snapshot raw are stored and hashed."""
+    snapshot = FixtureTransport(
+        bundle(catalog={"models": [{"id": "m", "note": CANARY, "nested": {"deep": CANARY}}]}),
+        extra_secrets=frozenset({CANARY}),
+    ).discover()
+    assert CANARY not in json.dumps(dict(snapshot.raw))
+    assert CANARY not in json.dumps([e.model_dump(mode="json") for e in snapshot.entries])
+
+
+# ---------------------------------------------------------------------------
+# The declared-secret path must be exercised on its own
+#
+# The `sk-` shaped CANARY above is defused by the built-in credential patterns
+# whether or not an adapter forwards its declared secrets, so it cannot prove the
+# wiring. BLIND is shaped so only an explicitly declared secret can remove it.
+# ---------------------------------------------------------------------------
+
+BLIND = "ZZQdeclared-canary-7f3a2b9c4d1e"
+
+
+def _leaky_fixture(exchanges: list[dict[str, object]]) -> FixtureTransport:
+    return FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "declared-secret",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": {"models": [{"id": "m", "note": BLIND}]},
+                "exchanges": exchanges,
+            }
+        ),
+        extra_secrets=frozenset({BLIND}),
+    )
+
+
+def test_the_declared_secret_path_is_wired_into_fixture_effective_settings() -> None:
+    transport = _leaky_fixture(
+        [
+            {
+                "endpoint_id": "fixture-a",
+                "benchmark_id": "ifeval",
+                "item_id": "syn-if-001",
+                "response": "x",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "effective_settings": {"debug": BLIND},
+            }
+        ]
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_the_declared_secret_path_is_wired_into_fixture_tool_calls() -> None:
+    transport = _leaky_fixture(
+        [
+            {
+                "endpoint_id": "fixture-a",
+                "benchmark_id": "bfcl",
+                "item_id": "call-1",
+                "response": "",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "tool_calls": [{"name": "f", "arguments": f'{{"k":"{BLIND}"}}'}],
+            }
+        ]
+    )
+    outcome = transport.complete(
+        sample_key=key("call-1", benchmark="bfcl"),
+        request=request_(),
+        prompt_hash=PROMPT_HASH,
+    )
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_the_declared_secret_path_is_wired_into_the_fixture_catalog_snapshot() -> None:
+    snapshot = _leaky_fixture([]).discover()
+    assert BLIND not in json.dumps(dict(snapshot.raw))
+    assert BLIND not in json.dumps([e.model_dump(mode="json") for e in snapshot.entries])
+
+
+def test_a_declared_secret_that_matches_no_pattern_survives_if_undeclared() -> None:
+    """The control: without declaring it, the opaque value is kept, so the above bite."""
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "undeclared",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "x",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                        "effective_settings": {"debug": BLIND},
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND in json.dumps(outcome.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the second G03 review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("catalog", [{"models": 5}, {"models": None}, {"models": "abc"}, {}])
+def test_a_malformed_catalog_is_an_empty_observation_not_an_exception(
+    catalog: dict[str, object],
+) -> None:
+    """discover() used to raise TypeError on a non-list models field."""
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {"name": "odd", "capabilities": NO_CAPABILITIES.model_dump(), "catalog": catalog}
+        )
+    ).discover()
+    assert snapshot.is_empty
+    assert snapshot.to_endpoint_specs() == ()
+
+
+def test_a_boolean_context_window_is_not_a_measurement() -> None:
+    """`True` is an int in Python; as a context window it would record 1 token."""
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "bool-window",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": {"models": [{"id": "m", "context_window": True}]},
+            }
+        )
+    ).discover()
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.context_window is None
+
+
+def test_a_real_context_window_is_kept() -> None:
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "window",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": {"models": [{"id": "m", "context_window": 32768}]},
+            }
+        )
+    ).discover()
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.context_window == 32768
+
+
+@pytest.mark.parametrize("route", [None, "", "   "])
+def test_a_missing_route_label_falls_back_rather_than_becoming_the_string_none(
+    route: object,
+) -> None:
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "routes",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": {"models": [{"id": "m", "route": route}]},
+            }
+        )
+    ).discover()
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.route == "zen"
+
+
+def test_an_explicit_route_label_is_kept() -> None:
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "routes",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": {"models": [{"id": "m", "route": "eu-west"}]},
+            }
+        )
+    ).discover()
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.route == "eu-west"
+
+
+def test_both_catalog_digests_agree_for_one_snapshot() -> None:
+    """Two digests for one snapshot meant a campaign could never verify its own."""
+    from stealthbench.adapters.zen import catalog_snapshot_digest
+
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "digest",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": {"models": [{"id": "m"}]},
+            }
+        )
+    ).discover()
+    assert catalog_snapshot_digest(snapshot) == snapshot.digest()
+
+
+def test_the_catalog_digest_changes_when_the_raw_record_changes() -> None:
+    def digest_of(raw: dict[str, object]) -> str:
+        return (
+            FixtureTransport(
+                FixtureBundle.model_validate(
+                    {
+                        "name": "digest",
+                        "capabilities": NO_CAPABILITIES.model_dump(),
+                        "catalog": {"models": [{"id": "m", **raw}]},
+                    }
+                )
+            )
+            .discover()
+            .digest()
+        )
+
+    assert digest_of({"note": "a"}) != digest_of({"note": "b"})
+
+
+def test_a_streamed_whitespace_only_answer_is_delivered_not_invented_away() -> None:
+    """A blank answer is a real delivery, and the grader's business, not the adapter's.
+
+    Turning it into a transport failure would fabricate an endpoint error that never
+    happened and drop a real observation from the result set.
+    """
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "blank",
+                "capabilities": Capabilities(
+                    streaming=True,
+                    tool_calls=False,
+                    reasoning=False,
+                    usage_reporting=False,
+                    logprobs=False,
+                ).model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "   ",
+                        "stream_frames": [{"choices": [{"delta": {"content": "   "}}]}],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "   "
+    assert outcome.result.delivery_status is DeliveryStatus.ACCEPTED
+    assert outcome.failure is None

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from stealthbench.adapters.base import FailureKind
+from stealthbench.adapters.base import FailureKind, FixtureBundle, FixtureTransport
 from stealthbench.adapters.streaming import (
     SSEParser,
     StreamEvent,
@@ -25,7 +25,8 @@ from stealthbench.adapters.streaming import (
     decode_stream_bytes,
     parse_stream,
 )
-from stealthbench.schemas.results import SampleKey, Usage
+from stealthbench.schemas.campaign import Capabilities
+from stealthbench.schemas.results import ModelRequest, SampleKey, Usage
 
 pytestmark = pytest.mark.contract
 
@@ -254,6 +255,33 @@ def test_a_finish_chunk_is_captured() -> None:
     assert outcome.result.finish_status == "length"
 
 
+def test_a_truncated_terminal_record_is_not_recorded_as_a_clean_stop() -> None:
+    """The real terminal shape: last content delta and finish_reason in one record.
+
+    An OpenAI-compatible gateway sends them together, so a parser that keeps the
+    reason only on an empty-delta record turns every truncated answer into a stop.
+    """
+    truncated = {"choices": [{"delta": {"content": "truncated ans"}, "finish_reason": "length"}]}
+    outcome, assembly = parse_stream(
+        [sse(delta("truncated ans"), truncated) + DONE], sample_key=key()
+    )
+    assert assembly.finish_reason == "length"
+    assert outcome.result is not None
+    assert outcome.result.finish_status == "length"
+    assert outcome.result.finish_status != "stop"
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [("length", "length"), ("content_filter", "content_filter"), ("tool_calls", "tool_calls")],
+)
+def test_every_terminal_reason_survives_a_combined_final_record(reason: str, expected: str) -> None:
+    combined = {"choices": [{"delta": {"content": "tail"}, "finish_reason": reason}]}
+    outcome, _ = parse_stream([sse(delta("tail"), combined) + DONE], sample_key=key())
+    assert outcome.result is not None
+    assert outcome.result.finish_status == expected
+
+
 def test_an_unrecognised_finish_reason_becomes_an_error_not_a_stop() -> None:
     payload = {"choices": [{"delta": {}, "finish_reason": "brand_new"}]}
     outcome, _ = parse_stream([sse(delta("x"), payload) + DONE], sample_key=key())
@@ -387,11 +415,45 @@ def test_assembly_reports_ordered_timings() -> None:
         StreamEvent(kind=StreamEventKind.DELTA, content_delta="b"),
         StreamEvent(kind=StreamEventKind.DONE),
     ]
-    assembly = assemble(events, total_seconds=3.0)
+    assembly = assemble(events, total_seconds=3.0, pacing=lambda index, _event: float(index))
     assert assembly.chunk_count == 3
     assert assembly.first_content_seconds == 0.0
     assert assembly.first_answer_seconds == 1.0
     assert assembly.total_seconds == 3.0
+
+
+def test_no_offset_is_invented_against_a_measured_total() -> None:
+    """Without measured pacing the per-event timings stay absent, not fabricated.
+
+    Pairing an event's position with a real total can produce a time past the total,
+    which the contract rejects -- and clamping it would invent a coincidence.
+    """
+    events = [StreamEvent(kind=StreamEventKind.DELTA, content_delta=f"c{i}") for i in range(9)]
+    events.append(StreamEvent(kind=StreamEventKind.DONE))
+    assembly = assemble(events, total_seconds=1.0)
+    assert assembly.first_content_seconds is None
+    assert assembly.first_answer_seconds is None
+    assert assembly.total_seconds == 1.0
+
+
+def test_a_measured_total_with_many_frames_still_produces_a_result() -> None:
+    """Regression: fabricated offsets used to raise out of the streaming adapters."""
+    frames = [
+        {"choices": [{"delta": {"reasoning_content": f"think {i}"}, "finish_reason": None}]}
+        for i in range(5)
+    ]
+    frames.append({"choices": [{"delta": {"content": "done"}, "finish_reason": "stop"}]})
+    frames.append({"choices": [], "usage": {"input_tokens": 4, "output_tokens": 9}})
+    body = (
+        b"".join(b"data: " + json.dumps(f).encode() + b"\n\n" for f in frames) + b"data: [DONE]\n\n"
+    )
+    outcome, _ = parse_stream([body], total_seconds=1.0, sample_key=key(), route="zen")
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "done"
+    assert outcome.result.streaming is not None
+    assert outcome.result.streaming.total_seconds == 1.0
+    assert outcome.result.streaming.first_content_seconds is None
 
 
 def test_an_empty_assembly_is_safe() -> None:
@@ -436,10 +498,141 @@ def test_a_streamed_result_keeps_the_sample_key_it_was_asked_for() -> None:
 
 
 def test_a_stream_result_carries_no_credential() -> None:
+    """A model can echo a prompt that contains a secret; the result must be clean.
+
+    The previous version asserted only that the call succeeded, so it passed with
+    redaction removed entirely.
+    """
     body = sse(delta(f"token {CANARY}")) + DONE
     outcome, _ = parse_stream([body], sample_key=key())
     assert outcome.ok
     assert outcome.result is not None
+    # The response legitimately echoes what the model was told, so the check is on
+    # the metadata the harness itself adds, which must never carry a credential.
+    assert CANARY not in json.dumps(outcome.result.redacted_provider_metadata)
+
+
+def test_a_streamed_result_records_its_route() -> None:
+    """T03C: route labels stay distinct across routes serving identical bytes."""
+    body = sse(delta("x")) + DONE
+    zen, _ = parse_stream([body], sample_key=key(), route="zen", adapter="zen")
+    fixture, _ = parse_stream([body], sample_key=key(), route="fixture", adapter="fixture")
+    assert zen.result is not None and fixture.result is not None
+    assert zen.result.response == fixture.result.response
+    assert zen.result.redacted_provider_metadata["route"] == "zen"
+    assert fixture.result.redacted_provider_metadata["route"] == "fixture"
+    assert zen.result.redacted_provider_metadata != fixture.result.redacted_provider_metadata
+
+
+def test_a_crlframed_stream_keeps_all_of_its_content() -> None:
+    """A record is dispatched on a blank line terminated by CRLF, LF or a bare CR."""
+    body = (
+        b"data: " + json.dumps(delta("FIRST")).encode("utf-8") + b"\r\n\r\n"
+        b"data: " + json.dumps(delta("SECOND")).encode("utf-8") + b"\r\n\r\n"
+        b"data: [DONE]\r\n\r\n"
+    )
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.content == "FIRSTSECOND", "CRLF framing must not lose content"
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "FIRSTSECOND"
+
+
+def test_a_mixed_crlf_and_lf_stream_keeps_all_of_its_content() -> None:
+    body = (
+        b"data: " + json.dumps(delta("A")).encode("utf-8") + b"\r\n\r\n"
+        b"data: " + json.dumps(delta("B")).encode("utf-8") + b"\n\n"
+        b"data: " + json.dumps(delta("C")).encode("utf-8") + b"\r\r"
+        b"data: [DONE]\n\n"
+    )
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.content == "ABC"
+    assert outcome.ok
+
+
+def test_a_crlf_stream_split_across_reads_still_parses() -> None:
+    body = b"data: " + json.dumps(delta("split")).encode("utf-8") + b"\r\n\r\ndata: [DONE]\r\n\r\n"
+    midpoint = body.index(b"\r\n\r\n") + 3
+    outcome, assembly = parse_stream(
+        [body[:midpoint], body[midpoint:]], sample_key=key(), route="zen"
+    )
+    assert assembly.content == "split"
+    assert outcome.ok
+
+
+def test_a_fixture_adapter_can_stream_and_labels_its_own_route() -> None:
+    """A dispatched request must actually be able to reach the streaming path."""
+    streaming_caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "streamed",
+                "capabilities": streaming_caps.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "alias-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "item-1",
+                        "response": "streamed answer",
+                        "stream_frames": [
+                            {"choices": [{"delta": {"content": "streamed "}}]},
+                            {
+                                "choices": [
+                                    {"delta": {"content": "answer"}, "finish_reason": "stop"}
+                                ]
+                            },
+                            {"choices": [], "usage": {"input_tokens": 4, "output_tokens": 3}},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=ModelRequest(messages=[{"role": "user", "content": "hi"}], max_output_tokens=32),
+        prompt_hash="a" * 64,
+        capabilities=streaming_caps,
+    )
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "streamed answer"
+    assert outcome.result.usage.output_tokens == 3
+    assert outcome.result.redacted_provider_metadata["route"] == "fixture"
+    assert outcome.result.streaming is not None
+
+
+def test_streaming_off_a_non_streaming_endpoint_is_refused() -> None:
+    caps = Capabilities(
+        streaming=False, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "nostream",
+                "capabilities": caps.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "alias-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "item-1",
+                        "response": "x",
+                        "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=ModelRequest(messages=[{"role": "user", "content": "hi"}], max_output_tokens=32),
+        prompt_hash="a" * 64,
+        capabilities=caps,
+    )
+    assert not outcome.ok
+    assert outcome.failure is not None
 
 
 def test_streaming_module_imports_no_transport() -> None:
@@ -458,3 +651,326 @@ def test_streaming_module_imports_no_transport() -> None:
             modules.add(node.module.split(".")[0])
     for forbidden in ("httpx", "requests", "socket", "urllib", "http"):
         assert forbidden not in modules
+
+
+def test_a_mid_stream_error_frame_is_a_protocol_failure_not_an_interruption() -> None:
+    """The gateway said what went wrong; an interruption label would hide the cause."""
+    body = (
+        b'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n'
+        b'data: {"error":{"message":"upstream overloaded","type":"server_error"}}\n\n'
+    )
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
+    assert "upstream overloaded" in outcome.failure.detail
+    assert outcome.failure.body == {"message": "upstream overloaded", "type": "server_error"}
+    # The partial content is still available for diagnosis, just not accepted.
+    assert assembly.content == "partial"
+
+
+def test_a_bare_string_error_frame_is_still_a_protocol_failure() -> None:
+    outcome, _ = parse_stream(
+        [b'data: {"error":"gateway restart"}\n\n'], sample_key=key(), route="zen"
+    )
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
+    assert "gateway restart" in outcome.failure.detail
+
+
+def test_a_credential_in_a_mid_stream_error_body_is_redacted() -> None:
+    body = f'data: {{"error":{{"message":"rejected {CANARY}"}}}}\n\n'.encode()
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen", extra_secrets={CANARY})
+    assert outcome.failure is not None
+    assert CANARY not in outcome.failure.detail
+    assert CANARY not in json.dumps(outcome.failure.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the second G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_a_capture_without_the_sentinel_is_never_replayed_as_complete() -> None:
+    """CRITICAL: the adapters used to append `data: [DONE]` to every capture.
+
+    A connection that died mid-answer never sent the sentinel, so synthesising one
+    turned a truncated stream into an accepted sample.
+    """
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "cut",
+                "capabilities": Capabilities(
+                    streaming=True,
+                    tool_calls=False,
+                    reasoning=False,
+                    usage_reporting=False,
+                    logprobs=False,
+                ).model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "alias-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "item-1",
+                        "response": "half an answer",
+                        "stream_terminated": False,
+                        "stream_frames": [
+                            {"choices": [{"delta": {"content": "half "}}]},
+                            {"choices": [{"delta": {"content": "an answer"}}]},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=ModelRequest(messages=[{"role": "user", "content": "hi"}], max_output_tokens=8),
+        prompt_hash="a" * 64,
+    )
+    assert not outcome.ok
+    assert outcome.result is None, "a truncated capture must not become an accepted sample"
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.INTERRUPTED
+
+
+def test_a_terminated_capture_is_still_accepted() -> None:
+    """The control for the test above: the sentinel, not the frame count, decides."""
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "whole",
+                "capabilities": Capabilities(
+                    streaming=True,
+                    tool_calls=False,
+                    reasoning=False,
+                    usage_reporting=False,
+                    logprobs=False,
+                ).model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "alias-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "item-1",
+                        "response": "whole answer",
+                        "stream_frames": [{"choices": [{"delta": {"content": "whole answer"}}]}],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=ModelRequest(messages=[{"role": "user", "content": "hi"}], max_output_tokens=8),
+        prompt_hash="a" * 64,
+    )
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "whole answer"
+
+
+def test_a_declared_secret_reaches_no_part_of_a_streamed_failure() -> None:
+    """MAJOR: extra_secrets was not forwarded to the streaming parser at all."""
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "leaky-stream",
+                "capabilities": Capabilities(
+                    streaming=True,
+                    tool_calls=False,
+                    reasoning=False,
+                    usage_reporting=False,
+                    logprobs=False,
+                ).model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "alias-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "item-1",
+                        "response": "x",
+                        "stream_frames": [{"error": {"message": f"rejected {blind}"}}],
+                    }
+                ],
+            }
+        ),
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=ModelRequest(messages=[{"role": "user", "content": "hi"}], max_output_tokens=8),
+        prompt_hash="a" * 64,
+    )
+    assert outcome.failure is not None
+    assert blind not in outcome.failure.detail
+    assert blind not in json.dumps(outcome.to_dict())
+
+
+def test_an_undeclared_opaque_value_survives_a_streamed_failure() -> None:
+    """The control: without declaring it, the value is kept, so the test above bites."""
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    body = f'data: {{"error":{{"message":"rejected {blind}"}}}}\n\n'.encode()
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.failure is not None
+    assert blind in outcome.failure.detail
+
+
+def test_a_crlf_split_between_cr_and_lf_does_not_split_a_record() -> None:
+    """MAJOR: an eager CR conversion manufactured a blank line the wire never sent."""
+    record = (
+        b'data: {"choices":[{"delta":\r\ndata: {"content":"SPLIT-LOSS"}}]}'
+        b"\r\n\r\ndata: [DONE]\r\n\r\n"
+    )
+    cut = record.index(b"\r\n") + 1
+    outcome, _ = parse_stream([record[:cut], record[cut:]], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.response == "SPLIT-LOSS"
+
+
+@pytest.mark.parametrize("cut", range(1, 40))
+def test_no_read_boundary_can_change_a_crlf_stream(cut: int) -> None:
+    """Every split of the same bytes must give the same answer."""
+    record = (
+        b'data: {"choices":[{"delta":\r\ndata: {"content":"PARTS"}}]}\r\n\r\ndata: [DONE]\r\n\r\n'
+    )
+    if cut >= len(record):
+        pytest.skip("offset past the end of the capture")
+    outcome, _ = parse_stream([record[:cut], record[cut:]], sample_key=key(), route="zen")
+    whole, _ = parse_stream([record], sample_key=key(), route="zen")
+    assert (outcome.result.response if outcome.result else None) == (
+        whole.result.response if whole.result else None
+    )
+
+
+def test_usage_reported_on_the_terminal_record_is_kept() -> None:
+    """MODERATE: a billed count vanished because the finish branch won."""
+    body = (
+        b'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}],'
+        b'"usage":{"input_tokens":4,"output_tokens":9}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.usage.input_tokens == 4
+    assert outcome.result.usage.output_tokens == 9
+    assert outcome.result.usage.provider_reported is True
+
+
+def test_usage_split_across_two_frames_is_not_half_lost() -> None:
+    body = (
+        b'data: {"choices":[],"usage":{"input_tokens":11}}\n\n'
+        b'data: {"choices":[],"usage":{"output_tokens":7}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.usage.input_tokens == 11
+    assert outcome.result.usage.output_tokens == 7
+
+
+def test_a_content_parts_delta_is_not_silently_lost() -> None:
+    """MODERATE: the streamed path dropped a shape the non-streamed path reads."""
+    parts = [{"type": "text", "text": "Paris "}, {"type": "text", "text": "France."}]
+    chunk = json.dumps({"choices": [{"delta": {"content": parts}, "finish_reason": None}]})
+    finish = json.dumps({"choices": [{"delta": {"content": []}, "finish_reason": "stop"}]})
+    body = b"data: " + chunk.encode() + b"\n\n" + b"data: " + finish.encode() + b"\n\n"
+    body += b"data: [DONE]\n\n"
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.response == "Paris France."
+
+
+def test_recorded_unsupported_settings_are_reported_when_streaming() -> None:
+    """MODERATE: the streamed path silently ignored what the capture declined."""
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "declines",
+                "capabilities": caps.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "alias-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "item-1",
+                        "response": "x",
+                        "unsupported_settings": ["top_p"],
+                        "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(
+        sample_key=key(),
+        request=ModelRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            max_output_tokens=8,
+            top_p=0.5,
+        ),
+        prompt_hash="a" * 64,
+        capabilities=caps,
+    )
+    assert [item.setting for item in outcome.unsupported] == ["top_p"]
+    assert outcome.unsupported[0].requested == 0.5
+
+
+def test_a_corrupt_byte_does_not_stall_the_rest_of_the_stream() -> None:
+    """MODERATE: one undecodable byte used to hold back every later byte.
+
+    The granularity matters as much as the content: a real adapter times the reads,
+    and text that only appears at end of stream would be recorded as arriving then.
+    """
+    pieces = list(decode_stream_bytes([b"hello ", b"\xff", b"world ", b"again"]))
+    assert pieces == ["hello ", "\ufffd", "world ", "again"], pieces
+
+
+def test_a_leading_corrupt_byte_still_lets_the_rest_through() -> None:
+    """The case that used to swallow everything: no decodable prefix at all."""
+    pieces = list(decode_stream_bytes([b"\xffsecond part", b"third part"]))
+    assert pieces == ["\ufffd", "second part", "third part"], pieces
+
+
+def test_a_truncated_multi_byte_character_is_still_held_back() -> None:
+    """The other half of the fix: a genuinely incomplete sequence must be recombined."""
+    assert "".join(decode_stream_bytes([b"h\xc3", b"\xa9llo"])) == "héllo"
+    assert "".join(decode_stream_bytes([b"a\xf0\x9f", b"\x98\x80b"])) == "a\U0001f600b"
+
+
+def test_a_truncated_tail_at_end_of_stream_is_surfaced_not_dropped() -> None:
+    """Holding back applies between reads; at end of stream the tail is reported."""
+    assert list(decode_stream_bytes([b"h\xc3"])) == ["h\ufffd"]
+
+
+def test_a_stream_with_no_finish_reason_does_not_report_a_clean_stop() -> None:
+    """MAJOR: an absent reason was mapped to ``stop``."""
+    body = (
+        b'data: {"choices":[{"delta":{"content":"cut?"},"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+    )
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.finish_status is None
+
+
+def test_usage_on_a_contentless_terminal_record_is_kept() -> None:
+    """MODERATE: the finish branch used to drop usage on a record with no delta.
+
+    A gateway may close with an empty record that carries both the reason and the
+    usage, which is the only place the counts appear.
+    """
+    body = (
+        b'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":null}]}\n\n'
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+        b'"usage":{"input_tokens":13,"output_tokens":5}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.response == "answer"
+    assert outcome.result.finish_status == "stop"
+    assert outcome.result.usage.input_tokens == 13
+    assert outcome.result.usage.output_tokens == 5

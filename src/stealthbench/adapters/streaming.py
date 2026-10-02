@@ -17,7 +17,7 @@ there is deliberately no way to derive a token rate from chunks alone.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final
@@ -42,6 +42,7 @@ class StreamEventKind(StrEnum):
     USAGE = "usage"
     FINISH = "finish"
     DONE = "done"
+    ERROR = "error"
     UNKNOWN = "unknown"
 
 
@@ -79,6 +80,8 @@ class StreamAssembly:
     first_answer_seconds: float | None = None
     total_seconds: float | None = None
     saw_done: bool = False
+    error: dict[str, Any] | None = None
+    error_message: str | None = None
 
     def apply(self, event: StreamEvent, *, at_seconds: float | None) -> None:
         self.chunk_count += 1
@@ -88,12 +91,22 @@ class StreamAssembly:
             self.content += event.content_delta
         if event.reasoning_delta:
             self.reasoning += event.reasoning_delta
-        if event.kind is StreamEventKind.FINISH and event.finish_reason:
+        # Any record may carry the terminal reason; a reason-only record and a final
+        # content record both deliver it.
+        if event.finish_reason:
             self.finish_reason = event.finish_reason
-        if event.kind is StreamEventKind.USAGE:
-            self.usage = event.usage
+        if event.kind is StreamEventKind.USAGE or event.usage.provider_reported:
+            self.usage = _merge_usage(self.usage, event.usage)
         if event.kind is StreamEventKind.DONE:
             self.saw_done = True
+        if event.kind is StreamEventKind.ERROR:
+            reported = event.raw.get("error")
+            if isinstance(reported, Mapping):
+                self.error = dict(reported)
+                inner = reported.get("message")
+                self.error_message = inner if isinstance(inner, str) else json.dumps(dict(reported))
+            else:
+                self.error_message = str(reported)
 
     def measurements(self) -> StreamingMeasurements:
         return StreamingMeasurements(
@@ -125,12 +138,32 @@ class SSEParser:
     def __init__(self) -> None:
         self._buffer = ""
         self._saw_done = False
+        self._pending_cr = False
 
     def feed(self, chunk: str) -> Iterator[StreamEvent]:
-        """Consume a chunk of decoded text and yield any complete records."""
+        """Consume a chunk of decoded text and yield any complete records.
+
+        Per the SSE specification a record is dispatched on a blank line terminated by
+        CRLF, LF or a bare CR, so a CRLF-framed stream would otherwise never split and
+        all content would be lost.
+
+        A CR at the very end of a read is held back rather than converted: the LF that
+        completes its CRLF may arrive in the next read, and converting eagerly would
+        manufacture a blank line where the wire had a single newline, splitting one
+        record into two unparsable halves.
+        """
         if self._saw_done:
             return
-        self._buffer += chunk
+        if self._pending_cr:
+            # The held-back CR terminated a line either way: CRLF or a bare CR.
+            # Dropping it entirely would weld the two lines it separated together.
+            chunk = chunk[1:] if chunk.startswith("\n") else chunk
+            chunk = "\n" + chunk
+            self._pending_cr = False
+        if chunk.endswith("\r"):
+            self._pending_cr = True
+            chunk = chunk[:-1]
+        self._buffer += chunk.replace("\r\n", "\n").replace("\r", "\n")
         while "\n\n" in self._buffer:
             raw_record, self._buffer = self._buffer.split("\n\n", 1)
             event = self._parse_record(raw_record)
@@ -152,7 +185,11 @@ class SSEParser:
         caller decide whether it was a complete payload, rather than the parser
         silently inventing or discarding content.
         """
-        remainder = self._buffer.strip()
+        if self._pending_cr:
+            # The stream ended on a bare CR, which is itself a line terminator.
+            self._buffer += "\n"
+            self._pending_cr = False
+        remainder = self._buffer.replace("\r\n", "\n").replace("\r", "\n").strip()
         self._buffer = ""
         if not remainder:
             return None
@@ -184,6 +221,41 @@ class SSEParser:
         return classify_chunk(payload)
 
 
+def _merge_usage(into: Usage, newer: Usage) -> Usage:
+    """Fold newly reported counts into what was already known.
+
+    Some gateways split usage across frames. Overwriting would discard the half that
+    arrived first, turning a reported count into a missing one.
+    """
+    return Usage(
+        input_tokens=newer.input_tokens if newer.input_tokens is not None else into.input_tokens,
+        output_tokens=(
+            newer.output_tokens if newer.output_tokens is not None else into.output_tokens
+        ),
+        cached_input_tokens=(
+            newer.cached_input_tokens
+            if newer.cached_input_tokens is not None
+            else into.cached_input_tokens
+        ),
+        reasoning_tokens=(
+            newer.reasoning_tokens if newer.reasoning_tokens is not None else into.reasoning_tokens
+        ),
+        provider_reported=into.provider_reported or newer.provider_reported,
+    )
+
+
+def _text_from_parts(parts: Sequence[Any]) -> str:
+    """Concatenate the text of a content-parts delta, ignoring non-text parts."""
+    pieces: list[str] = []
+    for part in parts:
+        if not isinstance(part, Mapping):
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            pieces.append(text)
+    return "".join(pieces)
+
+
 def classify_chunk(payload: dict[str, Any]) -> StreamEvent:
     """Classify one streamed chunk.
 
@@ -206,6 +278,10 @@ def classify_chunk(payload: dict[str, Any]) -> StreamEvent:
             content = delta.get("content")
             if isinstance(content, str):
                 content_delta = content
+            elif isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+                # The same shape the non-streaming path already understands. Losing it
+                # here would accept an empty answer as a completed one.
+                content_delta = _text_from_parts(content)
             for name in ("reasoning_content", "reasoning"):
                 reasoning = delta.get(name)
                 if isinstance(reasoning, str) and reasoning:
@@ -216,16 +292,30 @@ def classify_chunk(payload: dict[str, Any]) -> StreamEvent:
             finish_reason = finish
 
     has_usage = isinstance(usage_raw, dict)
+    error_raw = payload.get("error")
+    if isinstance(error_raw, (dict, str)):
+        # A gateway that reports a failure mid-stream is a protocol error. Ignoring
+        # the frame and calling the result "interrupted" would hide the cause and
+        # misreport it to the scheduler as a retryable network event.
+        return StreamEvent(kind=StreamEventKind.ERROR, raw=payload)
     if content_delta:
+        # The terminal record commonly carries the last delta *and* finish_reason
+        # together. The reason must travel with it, or a length-truncated answer is
+        # recorded as a clean stop.
         return StreamEvent(
             kind=StreamEventKind.DELTA,
             content_delta=content_delta,
+            reasoning_delta=reasoning_delta,
+            finish_reason=finish_reason,
+            usage=usage_from_response(payload) if has_usage else Usage(),
             raw=payload,
         )
     if reasoning_delta:
         return StreamEvent(
             kind=StreamEventKind.REASONING_DELTA,
             reasoning_delta=reasoning_delta,
+            finish_reason=finish_reason,
+            usage=usage_from_response(payload) if has_usage else Usage(),
             raw=payload,
         )
     if has_usage and choice is None:
@@ -233,7 +323,14 @@ def classify_chunk(payload: dict[str, Any]) -> StreamEvent:
             kind=StreamEventKind.USAGE, usage=usage_from_response(payload), raw=payload
         )
     if finish_reason:
-        return StreamEvent(kind=StreamEventKind.FINISH, finish_reason=finish_reason, raw=payload)
+        # A gateway may put usage on the same record as the terminal reason. Dropping
+        # it would turn a billed request into a missing measurement.
+        return StreamEvent(
+            kind=StreamEventKind.FINISH,
+            finish_reason=finish_reason,
+            usage=usage_from_response(payload) if has_usage else Usage(),
+            raw=payload,
+        )
     if has_usage:
         return StreamEvent(
             kind=StreamEventKind.USAGE, usage=usage_from_response(payload), raw=payload
@@ -246,22 +343,32 @@ def decode_stream_bytes(chunks: Iterable[bytes]) -> Iterator[str]:
 
     Without the holdback, a multi-byte character split across two reads decodes to
     replacement characters and the response text is silently wrong.
+
+    Only a trailing incomplete sequence is held back. Corrupt bytes are emitted as
+    replacement characters immediately, so one bad byte cannot hold the rest of the
+    stream hostage until end of stream.
     """
     decoder_partial = b""
     for chunk in chunks:
         buffer = decoder_partial + chunk
-        for boundary in range(len(buffer), 0, -1):
+        decoder_partial = b""
+        while buffer:
             try:
-                text = buffer[:boundary].decode("utf-8")
-            except UnicodeDecodeError:
+                text = buffer.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                if exc.end == len(buffer):
+                    # The failing sequence runs to the end of what we have, so it may
+                    # simply be truncated: hold it back for the next read.
+                    decoder_partial = buffer
+                    break
+                if exc.start:
+                    yield buffer[: exc.start].decode("utf-8", errors="replace")
+                bad = buffer[exc.start : max(exc.end, exc.start + 1)]
+                yield bad.decode("utf-8", errors="replace")
+                buffer = buffer[max(exc.end, exc.start + 1) :]
                 continue
-            # Emit what decoded and hold back only the trailing incomplete character.
-            decoder_partial = buffer[boundary:]
-            if text:
-                yield text
+            yield text
             break
-        else:
-            decoder_partial = buffer
     if decoder_partial:
         # A truncated tail is surfaced as replacement characters rather than dropped,
         # so a corrupt stream is visible instead of quietly losing content.
@@ -269,37 +376,44 @@ def decode_stream_bytes(chunks: Iterable[bytes]) -> Iterator[str]:
 
 
 def assemble(
-    stream: Iterable[StreamEvent], *, total_seconds: float | None = None
+    stream: Iterable[StreamEvent],
+    *,
+    total_seconds: float | None = None,
+    pacing: Callable[[int, StreamEvent], float | None] | None = None,
 ) -> StreamAssembly:
     """Fold a stream into an assembly, timing the first content and first answer.
 
     ``first_content_seconds`` is when the first visible text arrived;
     ``first_answer_seconds`` is when the response was complete enough to answer,
     which may be later when reasoning preceded it or when the stream was cut short.
+
+    ``pacing`` supplies measured per-event offsets from a real adapter. Without it,
+    timings are recorded only when no total was measured either: inventing an offset
+    from an event's position and then pairing it with a measured total would produce
+    numbers that can contradict each other and can exceed the total.
     """
     result = StreamAssembly(total_seconds=total_seconds)
     events = list(stream)
+
+    def offset(index: int) -> float | None:
+        if pacing is not None:
+            return pacing(index, events[index])
+        if total_seconds is not None:
+            return None
+        return float(index)
+
     for index, event in enumerate(events):
-        at = _elapsed(index, len(events))
-        result.apply(event, at_seconds=at)
+        result.apply(event, at_seconds=offset(index))
     if result.first_answer_seconds is None and events:
         last_delta = max(
             (index for index, event in enumerate(events) if event.contributes_text),
             default=None,
         )
         if last_delta is not None:
-            result.first_answer_seconds = _elapsed(last_delta, len(events))
+            result.first_answer_seconds = offset(last_delta)
         elif result.content:
             result.first_answer_seconds = result.first_content_seconds
     return result
-
-
-def _elapsed(index: int, total: int) -> float:
-    """Placeholder pacing so tests can assert ordering without wall-clock coupling.
-
-    A real adapter passes measured timings; this keeps the assembly logic testable.
-    """
-    return float(index) if total else 0.0
 
 
 def streamed_result(
@@ -308,13 +422,28 @@ def streamed_result(
     attempt_id: str,
     attempt_number: int,
     assembly: StreamAssembly,
+    route: str,
+    adapter: str = "stream",
     manifest_hash: str | None = None,
+    extra_secrets: Iterable[str] = (),
 ) -> AdapterResult:
     """Turn an assembled stream into an adapter outcome.
 
     A stream that never sent its terminating sentinel is an interruption, not a
     completed answer, no matter how much content arrived.
     """
+    if assembly.error_message is not None:
+        # The gateway said what went wrong. Reporting that is the point: an upstream
+        # error is not the same failure as a connection that died mid-answer.
+        return AdapterResult(
+            result=None,
+            failure=safe_failure(
+                FailureKind.PROTOCOL,
+                f"endpoint reported an error mid-stream: {assembly.error_message}",
+                body=assembly.error,
+                extra_secrets=frozenset(extra_secrets),
+            ),
+        )
     if not assembly.saw_done:
         return AdapterResult(
             result=None,
@@ -343,7 +472,11 @@ def streamed_result(
         finish_status=finish,
         manifest_hash=manifest_hash,
         redacted_provider_metadata={
-            "adapter": "stream",
+            "adapter": adapter,
+            # The route is recorded on every streamed result so a stream through the
+            # gateway and a stream through a fixture are never conflated. Route,
+            # provider and family stay independent labels.
+            "route": route,
             "reasoning_chars": len(assembly.reasoning),
             "chunk_count": assembly.chunk_count,
         },
@@ -359,8 +492,15 @@ def parse_stream(
     attempt_id: str = "attempt-1",
     attempt_number: int = 1,
     manifest_hash: str | None = None,
+    route: str = "unlabeled",
+    adapter: str = "stream",
+    extra_secrets: Iterable[str] = (),
 ) -> tuple[AdapterResult, StreamAssembly]:
-    """Parse, assemble and classify a complete stream in one call."""
+    """Parse, assemble and classify a complete stream in one call.
+
+    ``route`` and ``adapter`` are required to be stated by the caller rather than
+    inferred, so a streamed result always says which route produced it.
+    """
     parser = SSEParser()
     events: list[StreamEvent] = []
     for text in decode_stream_bytes(chunks):
@@ -380,7 +520,10 @@ def parse_stream(
             attempt_id=attempt_id,
             attempt_number=attempt_number,
             assembly=assembly,
+            route=route,
+            adapter=adapter,
             manifest_hash=manifest_hash,
+            extra_secrets=extra_secrets,
         ),
         assembly,
     )

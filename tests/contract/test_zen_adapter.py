@@ -39,8 +39,10 @@ CANARY = "sk-canary-zen-0123456789abcdef"
 PROMPT_HASH = "a" * 64
 
 
-def key(alias_task: str = "ifeval::item-1", repeat: int = 1) -> SampleKey:
-    return SampleKey(campaign_id="c1", endpoint_id="alias-a", task_id=alias_task, repeat_id=repeat)
+def key(
+    alias_task: str = "ifeval::item-1", repeat: int = 1, endpoint: str = "alias-a"
+) -> SampleKey:
+    return SampleKey(campaign_id="c1", endpoint_id=endpoint, task_id=alias_task, repeat_id=repeat)
 
 
 def request_(**overrides: object) -> ModelRequest:
@@ -514,16 +516,26 @@ def test_no_tool_calls_reports_an_empty_tuple_not_none() -> None:
         ("function_call", "tool_calls"),
         ("content_filter", "content_filter"),
         ("something_new", "error"),
-        (None, "stop"),
     ],
 )
-def test_finish_reasons_map_to_the_frozen_vocabulary(reason: str | None, expected: str) -> None:
+def test_finish_reasons_map_to_the_frozen_vocabulary(reason: str, expected: str) -> None:
     assert map_finish_reason(reason) == expected
 
 
 def test_an_unrecognised_finish_reason_is_never_mapped_to_stop() -> None:
     """A truncated generation must not be counted as a clean stop."""
     assert map_finish_reason("weird") != "stop"
+
+
+def test_an_absent_finish_reason_stays_absent() -> None:
+    """No reason is not a stop. The gateway said nothing; the record must too.
+
+    This case previously asserted ``None -> "stop"``, which is how a truncated
+    generation gets counted as a completed answer.
+    """
+    assert map_finish_reason(None) is None
+    assert finish_reason_of({"choices": [{"delta": {}, "finish_reason": None}]}) is None
+    assert finish_reason_of({"choices": [{}]}) is None
 
 
 def test_a_missing_choices_array_is_an_error_not_a_stop() -> None:
@@ -609,3 +621,444 @@ def test_repeats_are_selectable_in_a_transcript() -> None:
     )
     assert first.result is not None and first.result.response == "hello there"
     assert second.result is not None and second.result.response == "second"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the G03 review findings
+# ---------------------------------------------------------------------------
+
+
+def test_a_repeat_specific_record_beats_a_generic_one() -> None:
+    """Defect: the repeat-less key was yielded first, so every repeat replayed one response."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": "GENERIC"}, "finish_reason": "stop"}]
+                ),
+            },
+            "ifeval::item-1#r2": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": "REPEAT-2"}, "finish_reason": "stop"}]
+                ),
+            },
+        }
+    )
+    request = request_()
+    responses = {
+        repeat: instance.complete(
+            sample_key=key(repeat=repeat), request=request, prompt_hash=PROMPT_HASH
+        ).result.response
+        for repeat in (1, 2, 3)
+    }
+    assert responses == {1: "GENERIC", 2: "REPEAT-2", 3: "GENERIC"}
+
+
+def test_every_repeat_gets_its_own_record_when_each_is_recorded() -> None:
+    instance = adapter(
+        exchanges={
+            f"ifeval::item-1#r{repeat}": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": f"r{repeat}"}, "finish_reason": "stop"}]
+                ),
+            }
+            for repeat in (1, 2, 3)
+        }
+    )
+    request = request_()
+    responses = [
+        instance.complete(
+            sample_key=key(repeat=repeat), request=request, prompt_hash=PROMPT_HASH
+        ).result.response
+        for repeat in (1, 2, 3)
+    ]
+    assert responses == ["r1", "r2", "r3"]
+
+
+@pytest.mark.parametrize("raw", ["false", "no", 1, "yes", 0])
+def test_a_non_boolean_capability_is_never_reported_as_supported(raw: object) -> None:
+    snapshot = normalize_catalog({"data": [{"id": "odd", "capabilities": {"streaming": raw}}]})
+    entry = snapshot.get("odd")
+    assert entry is not None
+    assert entry.capabilities.streaming is False
+
+
+def test_a_credential_in_effective_settings_is_redacted() -> None:
+    """Defect: Zen effective_settings bypassed redact_mapping while its metadata did not."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(stealthbench_effective={"debug": CANARY}),
+            }
+        },
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+
+
+def test_a_credential_in_a_zen_tool_call_is_redacted() -> None:
+    payload = chat_payload(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": f'{{"k":"{CANARY}"}}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    )
+    instance = adapter(
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}},
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+
+
+def test_a_credential_in_a_zen_catalog_raw_record_is_redacted() -> None:
+    snapshot = ZenAdapter(
+        catalog_payload={"data": [{"id": "m", "note": CANARY}]},
+        extra_secrets=frozenset({CANARY}),
+    ).discover()
+    assert CANARY not in json.dumps(dict(snapshot.raw))
+    assert CANARY not in json.dumps([e.model_dump(mode="json") for e in snapshot.entries])
+
+
+def test_the_zen_adapter_can_stream_and_labels_its_own_route() -> None:
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "hello "}}]},
+                    {"choices": [{"delta": {"content": "world"}, "finish_reason": "stop"}]},
+                    {"choices": [], "usage": {"input_tokens": 3, "output_tokens": 2}},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "hello world"
+    assert outcome.result.usage.output_tokens == 2
+    assert outcome.result.redacted_provider_metadata["route"] == "zen"
+
+
+def test_streaming_an_exchange_without_frames_is_reported() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}})
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
+
+
+def test_a_credential_in_the_reported_model_name_is_redacted() -> None:
+    """A gateway can echo the credential back inside the model field."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(model=f"alias-a-{CANARY}"),
+            }
+        },
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+    assert outcome.result is not None
+    assert CANARY not in str(outcome.result.redacted_provider_metadata.get("reported_model"))
+
+
+# ---------------------------------------------------------------------------
+# The declared-secret path must be exercised on its own
+#
+# An `sk-...` shaped canary is defused by the built-in credential patterns whether
+# or not the adapter passes its declared secrets through, so it cannot prove the
+# declared-secrets wiring. BLIND is shaped so that only an explicitly declared
+# secret can remove it.
+# ---------------------------------------------------------------------------
+
+BLIND = "ZZQdeclared-canary-7f3a2b9c4d1e"
+
+
+def test_the_declared_secret_path_is_wired_into_effective_settings() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(
+                    model=f"alias-{BLIND}", stealthbench_effective={"debug": BLIND}
+                ),
+            }
+        },
+        extra_secrets=frozenset({BLIND}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_the_declared_secret_path_is_wired_into_tool_calls() -> None:
+    payload = chat_payload(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": f'{{"k":"{BLIND}"}}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    )
+    instance = adapter(
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}},
+        extra_secrets=frozenset({BLIND}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_the_declared_secret_path_is_wired_into_the_catalog_snapshot() -> None:
+    snapshot = ZenAdapter(
+        catalog_payload={"data": [{"id": "m", "note": BLIND}]},
+        extra_secrets=frozenset({BLIND}),
+    ).discover()
+    assert BLIND not in json.dumps(dict(snapshot.raw))
+    assert BLIND not in json.dumps([e.model_dump(mode="json") for e in snapshot.entries])
+
+
+def test_the_declared_secret_path_is_wired_into_a_failure_body() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 500,
+                "body": {"error": {"message": f"upstream rejected {BLIND}"}},
+            }
+        },
+        extra_secrets=frozenset({BLIND}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_a_declared_secret_that_matches_no_pattern_is_still_visible_if_undeclared() -> None:
+    """The control: without declaring it, the value survives, so the tests above bite."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(stealthbench_effective={"debug": BLIND}),
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND in json.dumps(outcome.to_dict()), "an undeclared opaque value stays as-is"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the second G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_a_capture_without_the_sentinel_is_not_replayed_as_complete() -> None:
+    """CRITICAL: the Zen stream path appended `data: [DONE]` unconditionally."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_terminated": False,
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "truncated mid-"}}]},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.INTERRUPTED
+
+
+def test_a_declared_secret_reaches_no_part_of_a_zen_streamed_failure() -> None:
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"error": {"message": f"gateway rejected {blind}"}}],
+            }
+        },
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert blind not in outcome.failure.detail
+    assert blind not in json.dumps(outcome.to_dict())
+
+
+def test_recorded_unsupported_settings_are_reported_on_the_zen_route() -> None:
+    """MAJOR: the Zen route could only ever report the `stream` setting."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["temperature", "top_p"],
+            }
+        }
+    )
+    outcome = instance.complete(
+        sample_key=key(),
+        request=request_(temperature=0.7, top_p=0.5),
+        prompt_hash=PROMPT_HASH,
+    )
+    assert sorted(item.setting for item in outcome.unsupported) == ["temperature", "top_p"]
+    reported = {item.setting: item.requested for item in outcome.unsupported}
+    assert reported["temperature"] == 0.7
+    assert reported["top_p"] == 0.5
+
+
+def test_recorded_unsupported_settings_are_reported_when_streaming() -> None:
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "unsupported_settings": ["top_p"],
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(top_p=0.5),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert [item.setting for item in outcome.unsupported] == ["top_p"]
+
+
+def test_an_unqualified_transcript_key_is_refused_when_several_aliases_exist() -> None:
+    """MAJOR: one capture was replayed as a sample for every endpoint in the campaign."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}, {"id": "alias-b"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    for endpoint in ("alias-a", "alias-b", "alias-c"):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint),
+            request=request_(),
+            prompt_hash=PROMPT_HASH,
+        )
+        assert not outcome.ok, f"{endpoint} must not inherit another endpoint's capture"
+        assert outcome.failure is not None
+        assert outcome.failure.kind is FailureKind.NO_FIXTURE
+
+
+def test_an_unqualified_transcript_key_is_used_when_the_capture_has_one_alias() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+
+
+def test_an_endpoint_qualified_key_is_used_regardless_of_alias_count() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}, {"id": "alias-b"}]},
+        exchanges={"alias-a:ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    mine = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    theirs = instance.complete(
+        sample_key=key(endpoint="alias-b"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert mine.ok
+    assert not theirs.ok
+
+
+def test_a_catalog_request_with_a_query_string_is_still_recognised() -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    catalog = _catalog_from_requests(
+        [
+            {
+                "method": "GET",
+                "path": "/v1/models?limit=100",
+                "status": 200,
+                "body": {"data": [{"id": "m"}]},
+            }
+        ]
+    )
+    assert catalog == {"data": [{"id": "m"}]}
+
+
+@pytest.mark.parametrize("status", [500, 401, True, "200", 302])
+def test_only_a_real_2xx_catalog_response_is_accepted(status: object) -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    catalog = _catalog_from_requests(
+        [{"method": "GET", "path": "/v1/models", "status": status, "body": {"data": [{"id": "m"}]}}]
+    )
+    assert catalog is None
+
+
+def test_a_boolean_context_window_is_not_a_measurement_on_the_zen_route() -> None:
+    snapshot = normalize_catalog({"data": [{"id": "m", "context_window": True}]})
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.context_window is None
+
+
+@pytest.mark.parametrize("route", [None, "", "   "])
+def test_a_missing_route_label_does_not_become_the_string_none(route: object) -> None:
+    snapshot = normalize_catalog({"data": [{"id": "m", "route": route}]})
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.route == "zen", f"{route!r} must fall back, not stringify"
+
+
+def test_an_explicit_route_label_survives_on_the_zen_route() -> None:
+    snapshot = normalize_catalog({"data": [{"id": "m", "route": "eu-west"}]})
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.route == "eu-west"

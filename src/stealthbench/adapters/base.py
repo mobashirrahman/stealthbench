@@ -175,11 +175,17 @@ class CatalogSnapshot(BaseModel):
         return not self.entries
 
     def digest(self) -> str:
+        """One digest per snapshot content.
+
+        ``raw`` is included because a per-entry copy of it is: a catalog whose raw
+        record changed is a different observation even if the entries agree.
+        """
         return content_digest(
             {
                 "source": self.source,
                 "observed_at": self.observed_at,
                 "entries": [entry.model_dump(mode="json") for entry in self.entries],
+                "raw": self.raw,
             }
         )
 
@@ -313,12 +319,7 @@ def check_requested_settings(
     happened.
     """
     unsupported: list[UnsupportedSetting] = []
-    requested: dict[str, Any] = {
-        "max_output_tokens": request.max_output_tokens,
-        "temperature": request.temperature,
-        "top_p": request.top_p,
-        "stop": request.stop,
-    }
+    requested = _requested_settings(request)
     if capabilities is not None and stream and not capabilities.streaming:
         unsupported.append(
             UnsupportedSetting(
@@ -327,14 +328,26 @@ def check_requested_settings(
                 reason="the endpoint's catalog does not advertise streaming",
             )
         )
-    unknown = set(requested) - KNOWN_SETTINGS
-    for setting in sorted(unknown):
+    # A requested setting outside the documented vocabulary cannot be checked against
+    # a capability, so it is named rather than silently treated as supported.
+    for setting in sorted(set(requested) - KNOWN_SETTINGS):
         unsupported.append(
             UnsupportedSetting(
                 setting=setting, requested=requested[setting], reason="unknown setting"
             )
         )
     return tuple(unsupported)
+
+
+def _requested_settings(request: ModelRequest) -> dict[str, Any]:
+    """The settings this request asks for, as reportable values."""
+    return {
+        "max_output_tokens": request.max_output_tokens,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "seed": request.seed,
+        "stop": request.stop,
+    }
 
 
 def failed_result(
@@ -386,6 +399,12 @@ class RecordedExchange(BaseModel):
     streaming: Mapping[str, Any] | None = None
     finish_status: FinishStatus | None = "stop"
     tool_calls: tuple[Mapping[str, Any], ...] = ()
+    #: Recorded SSE frames, when this exchange was a streamed one.
+    stream_frames: tuple[Mapping[str, Any], ...] = ()
+    #: Whether the recorded stream sent its terminating ``data: [DONE]`` sentinel.
+    #: A capture taken from a connection that died never did, and replaying it as
+    #: complete would invent a finished answer out of a truncated one.
+    stream_terminated: bool = True
     failure_kind: str | None = None
     failure_detail: str | None = None
     http_status: int | None = None
@@ -462,17 +481,23 @@ class FixtureTransport(ProviderAdapter):
         """
         raw = dict(self.bundle.catalog)
         models = raw.get("models", raw.get("data", []))
+        if not isinstance(models, Sequence) or isinstance(models, (str, bytes)):
+            # A malformed catalog is an empty observation, not an exception: discovery
+            # must never take the campaign down on one bad fixture.
+            models = []
         entries: list[CatalogEntry] = []
         for index, item in enumerate(models):
             if not isinstance(item, dict):
                 continue
-            entry = _catalog_entry_from_raw(item, index)
+            entry = _catalog_entry_from_raw(item, index, extra_secrets=self.extra_secrets)
             if entry is not None:
                 entries.append(entry)
         return CatalogSnapshot(
             source=self.bundle.catalog_source,
             entries=tuple(entries),
-            raw=_safe_mapping(raw),
+            # The snapshot-level raw record is stored and folded into the catalog
+            # digest, so it is redacted too, not just the per-entry copies.
+            raw=redact_mapping(_safe_mapping(raw), extra_secrets=self.extra_secrets),
         )
 
     def capabilities(self) -> Capabilities:
@@ -520,14 +545,7 @@ class FixtureTransport(ProviderAdapter):
                 )
             )
 
-        unsupported = tuple(
-            UnsupportedSetting(
-                setting=name,
-                requested=_requested_value(request, name),
-                reason="the recorded endpoint does not offer this setting",
-            )
-            for name in recorded.unsupported_settings
-        )
+        unsupported = _unsupported_from(recorded, request)
 
         if recorded.outcome == "error":
             assert recorded.failure_kind is not None
@@ -550,7 +568,9 @@ class FixtureTransport(ProviderAdapter):
                 delivery_status=DeliveryStatus.ACCEPTED,
                 response=recorded.response,
                 usage=usage,
-                effective_settings=dict(recorded.effective_settings),
+                effective_settings=redact_mapping(
+                    dict(recorded.effective_settings), extra_secrets=self.extra_secrets
+                ),
                 streaming=StreamingMeasurements.model_validate(recorded.streaming)
                 if recorded.streaming
                 else None,
@@ -558,12 +578,92 @@ class FixtureTransport(ProviderAdapter):
                 manifest_hash=manifest_hash,
                 redacted_provider_metadata={
                     "adapter": "fixture",
+                    "route": self.route,
                     "bundle": self.bundle.name,
-                    "tool_calls": [dict(call) for call in recorded.tool_calls],
+                    # A model can echo a credential inside a tool-call argument, so
+                    # these are redacted like any other provider text.
+                    "tool_calls": redact_mapping(
+                        {"calls": [dict(call) for call in recorded.tool_calls]},
+                        extra_secrets=self.extra_secrets,
+                    )["calls"],
                 },
             ),
             unsupported=unsupported,
-            effective_settings=dict(recorded.effective_settings),
+            effective_settings=redact_mapping(
+                dict(recorded.effective_settings), extra_secrets=self.extra_secrets
+            ),
+        )
+
+    def stream(
+        self,
+        *,
+        sample_key: SampleKey,
+        request: ModelRequest,
+        prompt_hash: str,
+        manifest_hash: str | None = None,
+        attempt_id: str | None = None,
+        attempt_number: int = 1,
+        capabilities: Capabilities | None = None,
+    ) -> AdapterResult:
+        """Replay a recorded SSE stream.
+
+        Implemented rather than refused, so a fixture campaign exercises the same
+        streaming path a live one would. The route label is this adapter's own, so a
+        fixture stream is never confused with a gateway stream.
+        """
+        from stealthbench.adapters.streaming import parse_stream
+
+        endpoint_id = sample_key.endpoint_id
+        benchmark_id, _, item_id = sample_key.task_id.partition("::")
+        attempt = attempt_id or f"{sample_key.task_id}-r{sample_key.repeat_id}-a{attempt_number}"
+        self._calls.append((endpoint_id, benchmark_id, item_id))
+
+        recorded = self._find(endpoint_id, benchmark_id, item_id, sample_key.repeat_id)
+        if recorded is None:
+            return AdapterResult(
+                failure=TransportFailure(
+                    kind=FailureKind.NO_FIXTURE,
+                    detail=f"no recorded stream for {endpoint_id}/{benchmark_id}/{item_id}",
+                )
+            )
+        if not recorded.stream_frames:
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind.UNSUPPORTED_SETTING,
+                    f"recorded exchange for {benchmark_id}/{item_id} carries no stream frames",
+                    extra_secrets=self.extra_secrets,
+                )
+            )
+        if capabilities is not None and not capabilities.streaming:
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind.UNSUPPORTED_SETTING,
+                    "streaming was requested but the endpoint does not advertise it",
+                    extra_secrets=self.extra_secrets,
+                )
+            )
+
+        frames = b"".join(
+            b"data: " + json.dumps(dict(frame), ensure_ascii=False).encode("utf-8") + b"\n\n"
+            for frame in recorded.stream_frames
+        ) + (b"data: [DONE]\n\n" if recorded.stream_terminated else b"")
+        outcome, _assembly = parse_stream(
+            [frames],
+            sample_key=sample_key,
+            attempt_id=attempt,
+            attempt_number=attempt_number,
+            manifest_hash=manifest_hash,
+            route=self.route,
+            adapter="fixture",
+            extra_secrets=self.extra_secrets,
+        )
+        # A setting the endpoint does not offer is reported on the streamed path too;
+        # silently returning a result here would hide it from the campaign record.
+        return AdapterResult(
+            result=outcome.result,
+            failure=outcome.failure,
+            unsupported=_unsupported_from(recorded, request),
+            effective_settings=outcome.effective_settings,
         )
 
     def call_count(self) -> int:
@@ -571,6 +671,20 @@ class FixtureTransport(ProviderAdapter):
 
     def calls(self) -> tuple[tuple[str, str, str], ...]:
         return tuple(self._calls)
+
+
+def _unsupported_from(
+    recorded: RecordedExchange, request: ModelRequest
+) -> tuple[UnsupportedSetting, ...]:
+    """Settings the recorded endpoint declined, named with what was asked for."""
+    return tuple(
+        UnsupportedSetting(
+            setting=name,
+            requested=_requested_value(request, name),
+            reason="the recorded endpoint does not offer this setting",
+        )
+        for name in recorded.unsupported_settings
+    )
 
 
 def _requested_value(request: ModelRequest, setting: str) -> Any:
@@ -595,8 +709,7 @@ def _usage_from(recorded: RecordedExchange) -> Usage:
     raw = dict(recorded.usage or {})
 
     def optional(name: str) -> int | None:
-        value = raw.get(name)
-        return None if value is None else int(value)
+        return token_count(raw.get(name))
 
     return Usage(
         input_tokens=optional("input_tokens"),
@@ -607,7 +720,46 @@ def _usage_from(recorded: RecordedExchange) -> Usage:
     )
 
 
-def _catalog_entry_from_raw(item: Mapping[str, Any], index: int) -> CatalogEntry | None:
+def strict_flag(*candidates: Any) -> bool:
+    """Read a capability flag without ever guessing true.
+
+    ``bool("false")`` and ``bool("no")`` are both True, so a catalog that spells a
+    capability as a string would report support the endpoint never claimed. Only a
+    real boolean counts.
+    """
+    for value in candidates:
+        if isinstance(value, bool):
+            return value
+    return False
+
+
+def token_count(value: Any) -> int | None:
+    """Read one token count, or ``None`` when the value is not a usable count.
+
+    A boolean, a float, a numeric string or a negative number is not a token count.
+    Coercing any of them produces a fabricated measurement.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
+
+
+def _route_label(value: Any) -> str:
+    """The route a record names, or the default when it names none.
+
+    ``str(None)`` would label a record ``"None"``, which is worse than no label.
+    """
+    return value.strip() if isinstance(value, str) and value.strip() else "zen"
+
+
+def _catalog_entry_from_raw(
+    item: Mapping[str, Any],
+    index: int,
+    *,
+    extra_secrets: frozenset[str] = frozenset(),
+) -> CatalogEntry | None:
     """Normalize one raw catalog entry, or drop it if it is not usable.
 
     A malformed entry is skipped rather than half-parsed, and a capability the raw
@@ -619,34 +771,37 @@ def _catalog_entry_from_raw(item: Mapping[str, Any], index: int) -> CatalogEntry
     raw_caps = item.get("capabilities")
     caps = raw_caps if isinstance(raw_caps, Mapping) else {}
     capabilities = Capabilities(
-        streaming=bool(caps.get("streaming", item.get("supports_streaming", False))),
-        tool_calls=bool(caps.get("tool_calls", item.get("supports_tools", False))),
-        reasoning=bool(caps.get("reasoning", item.get("supports_reasoning", False))),
-        usage_reporting=bool(caps.get("usage_reporting", item.get("reports_usage", False))),
-        logprobs=bool(caps.get("logprobs", False)),
+        streaming=strict_flag(caps.get("streaming"), item.get("supports_streaming")),
+        tool_calls=strict_flag(caps.get("tool_calls"), item.get("supports_tools")),
+        reasoning=strict_flag(caps.get("reasoning"), item.get("supports_reasoning")),
+        usage_reporting=strict_flag(caps.get("usage_reporting"), item.get("reports_usage")),
+        logprobs=strict_flag(caps.get("logprobs")),
     )
     context = item.get("context_window", item.get("context_length"))
     return CatalogEntry(
         alias=alias,
-        route=str(item.get("route", "zen")),
+        route=_route_label(item.get("route")),
         display_name=item.get("display_name")
         if isinstance(item.get("display_name"), str)
         else None,
         provider=item.get("provider") if isinstance(item.get("provider"), str) else None,
         family=item.get("family") if isinstance(item.get("family"), str) else None,
-        context_window=int(context) if isinstance(context, int) and context > 0 else None,
+        # A bool is an int in Python; `True` as a context window would be recorded
+        # as 1 token, which is a fabricated measurement.
+        context_window=(
+            int(context)
+            if isinstance(context, int) and not isinstance(context, bool) and context > 0
+            else None
+        ),
         capabilities=capabilities,
-        raw=_safe_mapping(item),
+        # The raw record is retained for provenance and folded into the catalog
+        # digest, so it is redacted before it is ever stored.
+        raw=redact_mapping(_safe_mapping(item), extra_secrets=extra_secrets),
     )
 
 
 def _safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()}
-
-
-def redact_failure_detail(text: str, *, extra_secrets: frozenset[str] = frozenset()) -> str:
-    """Redact a failure detail string before it is stored or displayed."""
-    return redact_text(text, extra_secrets=extra_secrets)
 
 
 def safe_failure(
@@ -687,6 +842,7 @@ __all__: Sequence[str] = (
     "UnsupportedSetting",
     "check_requested_settings",
     "failed_result",
-    "redact_failure_detail",
     "safe_failure",
+    "strict_flag",
+    "token_count",
 )

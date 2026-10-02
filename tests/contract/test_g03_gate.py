@@ -44,8 +44,16 @@ NO_CAPS = Capabilities(
 )
 
 
-def key(task: str = "ifeval::item-1") -> SampleKey:
-    return SampleKey(campaign_id="c1", endpoint_id="alias-a", task_id=task, repeat_id=1)
+def key(task: str = "ifeval::item-1", endpoint: str = "alias-a") -> SampleKey:
+    return SampleKey(campaign_id="c1", endpoint_id=endpoint, task_id=task, repeat_id=1)
+
+
+#: The alias the committed capture records its exchanges under.
+CAPTURED_ALIAS = "zen-fast-alias"
+
+
+def captured_key(task: str) -> SampleKey:
+    return key(task, endpoint=CAPTURED_ALIAS)
 
 
 def request_(**overrides: object) -> ModelRequest:
@@ -287,36 +295,128 @@ def test_unsupported_settings_are_serialisable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_zen_adapter_runs_the_production_path_over_a_transcript(
-    tmp_path: Path,
-) -> None:
-    """A captured transcript drives the real adapter, not a test double."""
-    payload = {
-        "catalog": {"data": [{"id": "alias-a", "capabilities": {"streaming": True}}]},
-        "exchanges": {"ifeval::item-1": {"http_status": 200, "json": chat()}},
+TRANSCRIPT_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "zen"
+
+
+def test_the_transcript_fixtures_are_committed_protocol_capture() -> None:
+    """The capture exists on disk, in wire form, not only as inline test dictionaries."""
+    expected = {
+        "chat.completions.json",
+        "chat.completions.stream.sse",
+        "chat.completions.truncated.sse",
+        "chat.completions.server_error.sse",
     }
-    path = tmp_path / "transcript.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert expected <= {f.name for f in TRANSCRIPT_DIR.iterdir()}
 
-    adapter = ZenAdapter.from_path(path)
+    sse = (TRANSCRIPT_DIR / "chat.completions.stream.sse").read_bytes()
+    assert b"\r\n\r\n" in sse, "a real capture frames records with CRLF"
+    assert b"\n\n" not in sse.replace(b"\r\n", b""), "no bare-LF framing anywhere"
+    assert sse.rstrip().endswith(b"data: [DONE]")
+
+    body = json.loads((TRANSCRIPT_DIR / "chat.completions.json").read_text(encoding="utf-8"))
+    assert [r["method"] for r in body["requests"]] == ["GET", "POST", "POST", "POST"]
+    assert [r["status"] for r in body["requests"]] == [200, 200, 401, 429]
+
+
+def test_the_zen_adapter_runs_the_production_path_over_a_transcript() -> None:
+    """A captured transcript on disk drives the real adapter, not a test double."""
+    adapter = ZenAdapter.from_path(TRANSCRIPT_DIR / "chat.completions.json")
     snapshot = adapter.discover()
-    assert snapshot.aliases() == ("alias-a",)
-    assert snapshot.get("alias-a").capabilities.streaming is True
+    assert snapshot.aliases() == ("zen-fast-alias", "zen-reason-alias", "zen-legacy-alias")
+    assert snapshot.get("zen-fast-alias").capabilities.streaming is True
+    assert snapshot.get("zen-reason-alias").capabilities.reasoning is True
+    # The third alias advertises nothing; the snapshot must not fill it in.
+    assert snapshot.get("zen-legacy-alias").capabilities.streaming is False
 
-    outcome = adapter.complete(sample_key=key(), request=request_(), prompt_hash="a" * 64)
+    outcome = adapter.complete(
+        sample_key=captured_key("ifeval::capital-of-france"),
+        request=request_(),
+        prompt_hash="a" * 64,
+    )
     assert outcome.ok
     assert outcome.result is not None
-    assert outcome.result.response == "hi"
-    assert outcome.result.usage.input_tokens == 5
+    assert outcome.result.response == "Paris is the capital of France."
+    assert outcome.result.usage.input_tokens == 24
+    assert outcome.result.usage.output_tokens == 7
+    assert outcome.result.redacted_provider_metadata["route"] == "zen"
 
 
-def test_the_captured_catalog_is_digestible_for_storage(tmp_path: Path) -> None:
+def test_the_captured_catalog_is_digestible_for_storage() -> None:
     from stealthbench.adapters.zen import catalog_snapshot_digest
 
-    path = tmp_path / "transcript.json"
-    path.write_text(json.dumps({"catalog": {"data": [{"id": "alias-a"}]}}), encoding="utf-8")
-    snapshot = ZenAdapter.from_path(path).discover()
+    snapshot = ZenAdapter.from_path(TRANSCRIPT_DIR / "chat.completions.json").discover()
     assert len(catalog_snapshot_digest(snapshot)) == 64
+
+
+def test_the_captured_auth_header_never_reaches_an_artifact() -> None:
+    """The capture itself contains a credential-shaped value; output must not."""
+    adapter = ZenAdapter.from_path(TRANSCRIPT_DIR / "chat.completions.json", extra_secrets=CANARY)
+    for task in ("ifeval::capital-of-france", "ifeval::forbidden-keyword", "ifeval::rate-limited"):
+        outcome = adapter.complete(sample_key=key(task), request=request_(), prompt_hash="a" * 64)
+        assert CANARY not in json.dumps(outcome.to_dict()), task
+
+
+def test_the_captured_error_statuses_map_to_the_right_failure_kinds() -> None:
+    from stealthbench.adapters.base import FailureKind
+
+    adapter = ZenAdapter.from_path(TRANSCRIPT_DIR / "chat.completions.json")
+    unauthorized = adapter.complete(
+        sample_key=captured_key("ifeval::forbidden-keyword"),
+        request=request_(),
+        prompt_hash="a" * 64,
+    )
+    assert unauthorized.failure is not None
+    assert unauthorized.failure.kind is FailureKind.AUTHENTICATION
+
+    limited = adapter.complete(
+        sample_key=captured_key("ifeval::rate-limited"), request=request_(), prompt_hash="a" * 64
+    )
+    assert limited.failure is not None
+    assert limited.failure.kind is FailureKind.RATE_LIMIT
+    assert limited.failure.retry_after_seconds == 3.0
+
+
+def test_the_captured_stream_is_replayed_by_the_zen_adapter() -> None:
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=True, logprobs=False
+    )
+    adapter = ZenAdapter.from_path(TRANSCRIPT_DIR / "chat.completions.json")
+    outcome = adapter.stream(
+        sample_key=captured_key("ifeval::streamed-answer"),
+        request=request_(),
+        prompt_hash="a" * 64,
+        capabilities=caps,
+    )
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "Paris is the capital of France."
+    assert outcome.result.usage.output_tokens == 7
+    assert outcome.result.streaming is not None
+    assert outcome.result.streaming.chunk_count == 5
+
+
+def test_the_captured_truncated_stream_is_not_reported_as_a_clean_stop() -> None:
+    from stealthbench.adapters.streaming import parse_stream
+
+    raw = (TRANSCRIPT_DIR / "chat.completions.truncated.sse").read_bytes()
+    outcome, assembly = parse_stream([raw], sample_key=key(), route="zen")
+    assert assembly.content == "The quick brown fox jumps over the lazy"
+    assert outcome.result is not None
+    assert outcome.result.finish_status == "length"
+
+
+def test_a_captured_server_error_stream_is_reported_not_accepted() -> None:
+    from stealthbench.adapters.base import FailureKind
+    from stealthbench.adapters.streaming import parse_stream
+
+    raw = (TRANSCRIPT_DIR / "chat.completions.server_error.sse").read_bytes()
+    outcome, _ = parse_stream([raw], sample_key=key(), route="zen")
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
 
 
 def test_every_failure_kind_the_plan_names_is_expressible() -> None:
@@ -388,3 +488,43 @@ def test_adapter_outcomes_require_exactly_one_outcome() -> None:
 
     with pytest.raises(ValidationError, match="either a generation result or a failure"):
         AdapterResult()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the second G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_the_committed_cut_capture_has_no_sentinel_and_is_refused() -> None:
+    """A capture taken from a connection that died must not replay as a complete answer."""
+    raw = (TRANSCRIPT_DIR / "chat.completions.cut.sse").read_bytes()
+    assert b"data: [DONE]" not in raw, "the cut capture must genuinely lack the sentinel"
+    assert raw.count(b"\r\n\r\n") == 2
+
+    adapter = ZenAdapter.from_path(TRANSCRIPT_DIR / "chat.completions.json")
+    outcome = adapter.stream(
+        sample_key=captured_key("ifeval::cut-answer"),
+        request=request_(),
+        prompt_hash="a" * 64,
+    )
+    assert not outcome.ok
+    assert outcome.result is None, "a truncated capture must not become an accepted sample"
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.INTERRUPTED
+
+
+def test_the_committed_truncated_capture_still_carries_its_length_reason() -> None:
+    raw = (TRANSCRIPT_DIR / "chat.completions.truncated.sse").read_bytes()
+    assert raw.rstrip().endswith(b"data: [DONE]")
+    outcome, _ = parse_stream([raw], sample_key=captured_key("ifeval::x"), route="zen")
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.finish_status == "length"
+
+
+def test_every_committed_capture_is_crlf_framed() -> None:
+    """Not just the one the gate asserted before; all of them."""
+    for name in sorted(TRANSCRIPT_DIR.glob("*.sse")):
+        raw = name.read_bytes()
+        assert b"\r\n\r\n" in raw, f"{name.name} has no CRLF-framed record"
+        assert b"\n\n" not in raw.replace(b"\r\n", b""), f"{name.name} has bare-LF framing"
