@@ -58,3 +58,35 @@ Return `PASS` only when every acceptance criterion is supported. Otherwise retur
 ## Example first task
 
 Task `T00A`: create the installable package and CLI shell, a development dependency lock and a test layout. The CLI must show help and reject invalid commands; it must not print fabricated scores. Acceptance includes installation into a clean environment and tests for both behaviors. No provider access is needed. Leave dataset selection and contract implementation to their own tasks.
+
+---
+
+## Publishing after each gate
+
+Every gate that passes is committed and pushed. Concretely, for each gate:
+
+1. Re-run the gate checks and record `implementation/evidence/<gate>/<revision>/gate.json`
+   with the real commands and exit statuses.
+2. Verify the working tree is what the evidence claims:
+   `ruff check . && ruff format --check . && mypy src/stealthbench` and the gate suites.
+3. Stage and review: `git status --short`, then confirm nothing ignored-but-needed is
+   missing and that no `.venv`, cache, artifact or report path is staged.
+4. Commit with a message that states which gates passed, which are still open, and
+   explicitly that no benchmark result exists. Never describe a gate as passing when
+   its review has outstanding findings.
+5. Push: `git push origin main`.
+
+Rules that apply to publishing:
+
+- **Never fabricate or tidy the evidence history.** Gate history is append-only. A
+  superseded record stays on disk and says what superseded it and why.
+- **A public push is a real publication.** Do not push content the operator has not
+  seen, and do not publish a milestone whose review findings are unfixed without
+  saying so in the commit message.
+- **Secrets are checked, not assumed.** A local `pre-push` hook refuses any
+  credential-shaped string that is not a deliberate canary (constants named with
+  `canary`, or literals listed in `.git/allowed-canaries`). It is intentionally not
+  committed.
+- **Known open findings are stated in the commit message**, not buried. A commit that
+  says "G03 in review, 9 defects unfixed" is honest and useful; one that implies the
+  gate passed is not.
