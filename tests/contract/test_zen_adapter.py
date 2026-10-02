@@ -594,8 +594,16 @@ def test_an_adapter_is_loaded_from_a_transcript_file(tmp_path: Path) -> None:
     )
     instance = ZenAdapter.from_path(path)
     assert instance.discover().aliases() == ("alias-disk",)
-    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    # The capture names one alias, so the unqualified exchange binds to that alias.
+    outcome = instance.complete(
+        sample_key=key(endpoint="alias-disk"), request=request_(), prompt_hash=PROMPT_HASH
+    )
     assert outcome.ok
+    # And to no other: a different endpoint was never dispatched.
+    other = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert not other.ok, "the capture must not answer for an alias it never named"
 
 
 def test_a_transcript_file_must_be_an_object(tmp_path: Path) -> None:
@@ -1199,20 +1207,32 @@ def test_recorded_unsupported_complete_reports_what_was_actually_requested() -> 
     ("raw", "terminated"),
     [
         (True, True),
+        (1, True),
+        (1.0, True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
         (False, False),
         (0, False),
         (0.0, False),
         ("false", False),
         ("no", False),
+        ("off", False),
+        ("", False),
         (None, False),
-        (1, False),
+        ("maybe", False),
+        ([], False),
     ],
 )
-def test_only_a_real_true_means_a_capture_was_terminated(raw: object, terminated: bool) -> None:
-    """A value the fixture schema coerces to False must read the same way here."""
+def test_both_adapters_read_the_sentinel_flag_identically(raw: object, terminated: bool) -> None:
+    """One shared reader, so the same capture cannot get opposite verdicts."""
+    from stealthbench.adapters.base import read_terminated
     from stealthbench.adapters.zen import _was_terminated
 
     assert _was_terminated(raw) is terminated
+    assert read_terminated(raw) is terminated
 
 
 def test_an_absent_terminated_field_means_the_capture_was_complete() -> None:
@@ -1227,3 +1247,110 @@ def test_an_absent_terminated_field_means_the_capture_was_complete() -> None:
     )
     assert "stream_terminated" not in instance._exchanges["ifeval::item-1"]
     assert instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH).ok
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the fourth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_a_single_alias_catalog_binds_only_to_that_alias() -> None:
+    """Counting one alias was not enough: an unrelated endpoint must not match."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "only-alias"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    assert instance.complete(
+        sample_key=key(endpoint="only-alias"), request=request_(), prompt_hash=PROMPT_HASH
+    ).ok
+    for endpoint in ("alias-a", "unrelated", ""):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint), request=request_(), prompt_hash=PROMPT_HASH
+        )
+        assert not outcome.ok, f"{endpoint!r} must not inherit the capture"
+
+
+def test_a_usage_only_capture_with_no_counts_is_refused() -> None:
+    """`usage: {}` is a block, not a measurement, and cannot authorise a sample."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {"http_status": 200, "stream_frames": [{"usage": {}}]},
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+
+
+def test_a_capture_with_real_token_counts_is_still_accepted_when_streaming() -> None:
+    """The control for the test above: reported counts are content."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "x"}}]},
+                    {"choices": [], "usage": {"input_tokens": 2, "output_tokens": 1}},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+
+
+def test_a_bare_string_of_unsupported_settings_is_not_one_setting_per_character() -> None:
+    """A string is not a list of names; iterating it would invent four settings."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": "seed",
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(seed=5), prompt_hash=PROMPT_HASH)
+    assert outcome.unsupported == (), "a malformed record reports nothing rather than guessing"
+
+
+def test_a_list_of_unsupported_settings_is_still_reported() -> None:
+    """The control: a well-formed list is honoured."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["seed", "top_p"],
+            }
+        }
+    )
+    outcome = instance.complete(
+        sample_key=key(), request=request_(seed=5, top_p=0.5), prompt_hash=PROMPT_HASH
+    )
+    assert [item.setting for item in outcome.unsupported] == ["seed", "top_p"]
+
+
+def test_both_adapters_read_an_alias_under_the_same_keys() -> None:
+    """The two normalizers used different vocabularies for the same payload."""
+    from stealthbench.adapters.base import FixtureBundle, FixtureTransport
+    from stealthbench.schemas.campaign import Capabilities
+
+    for key in ("id", "alias", "slug", "name"):
+        payload = {"data": [{"id": "m1"}, {"id": "m2"}]}
+        payload["data"] = [{key: "m1"}, {key: "m2"}]
+        zen_aliases = ZenAdapter(catalog_payload=payload).discover().aliases()
+        caps = Capabilities(
+            streaming=False,
+            tool_calls=False,
+            reasoning=False,
+            usage_reporting=False,
+            logprobs=False,
+        )
+        fixture = FixtureTransport(
+            FixtureBundle.model_validate(
+                {"name": "m", "capabilities": caps.model_dump(), "catalog": payload}
+            )
+        )
+        assert zen_aliases == fixture.discover().aliases(), key

@@ -1057,24 +1057,75 @@ def test_an_offset_past_the_measured_total_is_dropped() -> None:
 
 
 def test_content_cannot_be_recorded_after_the_first_answer() -> None:
-    """An incoherent pair is not stored; the impossible half is dropped instead."""
+    """An incoherent pair is not stored; the impossible half is dropped instead.
+
+    Two content events with the offsets the pacing function reports: first content at
+    0.9, and the last content at 0.1, so first answer would precede first content.
+    """
     events = [
-        StreamEvent(kind=StreamEventKind.DELTA, content_delta="x"),
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="a"),
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="b"),
         StreamEvent(kind=StreamEventKind.DONE),
     ]
-    # first content at 0.9, first answer at 0.1
-    assembly = assemble(events, total_seconds=1.0, pacing=lambda index, _e: (0.9, 0.1)[index])
+    assembly = assemble(events, total_seconds=1.0, pacing=lambda index, _e: (0.9, 0.1, 0.95)[index])
+    # The ordering is impossible before streamed_result ever sees it.
+    assert assembly.first_content_seconds == 0.9
+    assert assembly.first_answer_seconds == 0.1
     outcome = streamed_result(
         sample_key=key(), attempt_id="a", attempt_number=1, assembly=assembly, route="zen"
     )
+    assert outcome.ok
     assert outcome.result is not None
     measurements = outcome.result.streaming
     assert measurements is not None
-    assert not (
-        measurements.first_content_seconds is not None
-        and measurements.first_answer_seconds is not None
-        and measurements.first_content_seconds > measurements.first_answer_seconds
+    assert measurements.first_content_seconds is None, "the impossible half is dropped"
+    assert measurements.first_answer_seconds == 0.1
+
+
+def test_a_coherent_timing_pair_is_kept_whole() -> None:
+    """The control: ordinary increasing offsets are recorded, not discarded."""
+    events = [
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="a"),
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="b"),
+        StreamEvent(kind=StreamEventKind.DONE),
+    ]
+    assembly = assemble(events, total_seconds=1.0, pacing=lambda index, _e: (0.1, 0.4, 0.9)[index])
+    outcome = streamed_result(
+        sample_key=key(), attempt_id="a", attempt_number=1, assembly=assembly, route="zen"
     )
+    measurements = outcome.result.streaming
+    assert measurements is not None
+    assert measurements.first_content_seconds == 0.1
+    assert measurements.first_answer_seconds == 0.4
+
+
+@pytest.mark.parametrize(
+    "usage_frame",
+    [{}, {"foo": 1}, {"input_tokens": None, "output_tokens": None}],
+    ids=["empty", "unrecognised", "explicit-nulls"],
+)
+def test_a_usage_block_with_no_counts_is_not_treated_as_an_answer(
+    usage_frame: dict[str, object],
+) -> None:
+    """`usage: {}` is a block, not a measurement, and must not authorise a sample."""
+    body = ("data: " + json.dumps({"usage": usage_frame}) + "\n\n").encode()
+    body += b"data: [DONE]\n\n"
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert not outcome.ok, "an empty usage block is not an answer"
+    assert outcome.result is None
+
+
+def test_a_reasoning_only_capture_is_delivered_rather_than_invented_away() -> None:
+    """Reasoning was billed and did arrive; the grader decides whether it answers."""
+    reasoning = json.dumps({"choices": [{"delta": {"reasoning_content": "thinking"}}]})
+    finish = json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+    body = f"data: {reasoning}\n\n".encode() + f"data: {finish}\n\n".encode() + b"data: [DONE]\n\n"
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.reasoning == "thinking"
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == ""
+    assert outcome.result.streaming is not None
 
 
 def test_a_first_reported_token_count_is_not_overwritten_by_a_terminal_zero() -> None:

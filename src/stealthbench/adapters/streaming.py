@@ -535,7 +535,13 @@ def streamed_result(
                 body=None,
             ),
         )
-    if not assembly.saw_content and not assembly.usage.provider_reported:
+    # A usage *block* is not an answer: an endpoint that sent `usage: {}` reported
+    # nothing, so accepting it would invent a sample with no content.
+    if (
+        not assembly.saw_content
+        and assembly.usage.input_tokens is None
+        and assembly.usage.output_tokens is None
+    ):
         # The stream was terminated but carried nothing at all. Accepting it would
         # invent a sample with no answer: the frames were absent or unusable, not
         # empty in fact.

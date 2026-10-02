@@ -27,6 +27,7 @@ from typing import Any, Final
 
 from pydantic import ValidationError
 
+from stealthbench.adapters.base import _ABSENT as _ABSENT
 from stealthbench.adapters.base import (
     AdapterResult,
     CatalogEntry,
@@ -35,7 +36,9 @@ from stealthbench.adapters.base import (
     ProviderAdapter,
     TransportFailure,
     UnsupportedSetting,
+    _alias_of,
     check_requested_settings,
+    read_terminated,
     safe_failure,
     strict_flag,
 )
@@ -166,8 +169,8 @@ class _CatalogNormalizer:
     ) -> CatalogEntry | None:
         if not isinstance(item, Mapping):
             return None
-        alias = item.get("id") or item.get("alias") or item.get("slug")
-        if not isinstance(alias, str) or not alias.strip():
+        alias = _alias_of(item)
+        if alias is None:
             return None
 
         caps = item.get("capabilities")
@@ -424,6 +427,21 @@ class ZenAdapter(ProviderAdapter):
                 return record
         return None
 
+    def _sole_alias(self) -> str | None:
+        """The one alias a capture can be bound to, or ``None`` if that is unclear.
+
+        A capture whose catalog names exactly one alias binds an endpoint-unqualified
+        key to that alias and to no other: an unrelated endpoint would be an endpoint
+        observation that was never dispatched.
+        """
+        aliases = {
+            entry.alias
+            for entry in normalize_catalog(
+                self._catalog_payload if isinstance(self._catalog_payload, Mapping) else {}
+            ).entries
+        }
+        return next(iter(aliases)) if len(aliases) == 1 else None
+
     def _aliases_are_unambiguous(self) -> bool:
         """Whether an endpoint-unqualified transcript key can mean only one alias.
 
@@ -451,7 +469,7 @@ class ZenAdapter(ProviderAdapter):
         """
         if self._endpoint_id is not None:
             return self._endpoint_id == sample_key.endpoint_id
-        return self._aliases_are_unambiguous()
+        return self._sole_alias() == sample_key.endpoint_id and bool(sample_key.endpoint_id)
 
     @staticmethod
     def _candidate_keys(sample_key: SampleKey, *, allow_unqualified: bool = True) -> Iterator[str]:
@@ -684,21 +702,13 @@ def _recorded_unsupported(
     )
 
 
-_ABSENT: Final = object()
-
-
 def _was_terminated(value: Any = _ABSENT) -> bool:
     """Whether a capture recorded its terminating sentinel.
 
-    An absent field means the capture was an ordinary complete one, which is what the
-    fixture schema's own default means. A field that is present but not a real ``True``
-    (``0``, ``"false"``, ``None``) is read the way the fixture schema coerces it --
-    as not terminated -- so the two adapters cannot return opposite verdicts on the
-    same capture.
+    Delegates to the shared reader the fixture schema also uses, so the two adapters
+    cannot return opposite verdicts on the same capture.
     """
-    if value is _ABSENT:
-        return True
-    return isinstance(value, bool) and value
+    return read_terminated(value)
 
 
 def _route_label(value: Any) -> str:

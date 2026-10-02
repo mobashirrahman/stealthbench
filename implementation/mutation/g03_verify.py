@@ -315,8 +315,8 @@ MUTATIONS = (
         "M27",
         "review3-6: a non-True stream_terminated is read as terminated again",
         "src/stealthbench/adapters/zen.py",
+        "    return read_terminated(value)",
         "    return isinstance(value, bool) and value",
-        "    return value is not False",
         "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
@@ -350,8 +350,12 @@ MUTATIONS = (
         "M31",
         "review3-2: a terminated capture with no usable frames is accepted again",
         "src/stealthbench/adapters/streaming.py",
-        "    if not assembly.saw_content and not assembly.usage.provider_reported:",
-        "    if False:",
+        (
+            "        not assembly.saw_content"
+            "\n        and assembly.usage.input_tokens is None"
+            "\n        and assembly.usage.output_tokens is None"
+        ),
+        "        not assembly.saw_content",
         "tests/contract",
     ),
     Mutation(
@@ -388,6 +392,82 @@ MUTATIONS = (
         "            unsupported=unsupported + _recorded_unsupported(record, request),",
         "            unsupported=unsupported,",
         "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M36",
+        "review4-1: an empty usage block counts as content again",
+        "src/stealthbench/adapters/streaming.py",
+        """    if (
+        not assembly.saw_content
+        and assembly.usage.input_tokens is None
+        and assembly.usage.output_tokens is None
+    ):""",
+        "    if not assembly.saw_content:",
+        "tests/contract",
+    ),
+    Mutation(
+        "M37",
+        "review4-2: a truthy non-boolean stream_terminated is read as not terminated",
+        "src/stealthbench/adapters/base.py",
+        "        return value.strip().lower() in _TRUE_WORDS",
+        "        return value.strip().lower() not in _TRUE_WORDS",
+        "tests/contract",
+    ),
+    Mutation(
+        "M38",
+        "review4-3: a single alias binds the unqualified key to any endpoint",
+        "src/stealthbench/adapters/zen.py",
+        (
+            "        return self._sole_alias() == sample_key.endpoint_id"
+            " and bool(sample_key.endpoint_id)"
+        ),
+        "        return self._sole_alias() is not None",
+        "tests/contract",
+    ),
+    Mutation(
+        "M39",
+        "review4-4: a recorded exchange fabricates a clean stop again",
+        "src/stealthbench/adapters/base.py",
+        """    #: Absent by default: a capture that does not say how the generation ended must
+    #: not be recorded as a clean stop.
+    finish_status: FinishStatus | None = None""",
+        '    finish_status: FinishStatus | None = "stop"',
+        "tests/contract",
+    ),
+    Mutation(
+        "M40",
+        "review4-5: an incoherent timing pair is stored whole",
+        "src/stealthbench/adapters/streaming.py",
+        "        and measurements.first_content_seconds > measurements.first_answer_seconds",
+        "        and measurements.first_content_seconds > measurements.total_seconds",
+        "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M41",
+        "review4-6: an alias key is dropped from the shared catalog vocabulary",
+        "src/stealthbench/adapters/base.py",
+        '_ALIAS_KEYS: Final[tuple[str, ...]] = ("id", "alias", "slug", "name")',
+        '_ALIAS_KEYS: Final[tuple[str, ...]] = ("id", "alias", "name")',
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M42",
+        "review4-7: a bare string of unsupported settings becomes one per character",
+        "src/stealthbench/adapters/zen.py",
+        "    if not isinstance(names, Sequence) or isinstance(names, (str, bytes)):",
+        "    if not isinstance(names, Sequence):",
+        "tests/contract",
+    ),
+    Mutation(
+        "M43",
+        "review4-8: a reasoning-only stream is refused",
+        "src/stealthbench/adapters/streaming.py",
+        """        if event.reasoning_delta:
+            self.saw_content = True
+            self.reasoning += event.reasoning_delta""",
+        """        if event.reasoning_delta:
+            self.reasoning += event.reasoning_delta""",
+        "tests/contract/test_streaming.py",
     ),
     Mutation(
         "M9",

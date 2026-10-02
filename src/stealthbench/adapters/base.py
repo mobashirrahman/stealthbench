@@ -31,7 +31,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from stealthbench.schemas.campaign import Capabilities, EndpointSpec
 from stealthbench.schemas.hashing import content_digest
@@ -383,7 +390,9 @@ class RecordedExchange(BaseModel):
     usage_reported: bool = True
     effective_settings: Mapping[str, Any] = Field(default_factory=dict)
     streaming: Mapping[str, Any] | None = None
-    finish_status: FinishStatus | None = "stop"
+    #: Absent by default: a capture that does not say how the generation ended must
+    #: not be recorded as a clean stop.
+    finish_status: FinishStatus | None = None
     tool_calls: tuple[Mapping[str, Any], ...] = ()
     #: Recorded SSE frames, when this exchange was a streamed one.
     stream_frames: tuple[Mapping[str, Any], ...] = ()
@@ -391,6 +400,13 @@ class RecordedExchange(BaseModel):
     #: A capture taken from a connection that died never did, and replaying it as
     #: complete would invent a finished answer out of a truncated one.
     stream_terminated: bool = True
+
+    @field_validator("stream_terminated", mode="before")
+    @classmethod
+    def _read_terminated(cls, value: Any) -> Any:
+        """Read the sentinel flag exactly as the Zen route reads it."""
+        return read_terminated(value)
+
     failure_kind: str | None = None
     failure_detail: str | None = None
     http_status: int | None = None
@@ -659,6 +675,33 @@ class FixtureTransport(ProviderAdapter):
         return tuple(self._calls)
 
 
+_ABSENT: Final = object()
+
+#: Spellings a capture may use for a true value. Anything else is False: an
+#: unrecognised value is not evidence that the stream completed.
+_TRUE_WORDS: Final[frozenset[str]] = frozenset({"true", "t", "yes", "y", "on", "1"})
+
+
+def read_terminated(value: Any = _ABSENT) -> bool:
+    """Whether a capture declared that its stream sent the terminating sentinel.
+
+    Both adapters call this, so the same capture cannot get one verdict from the
+    fixture transport and the opposite one from the gateway. An absent field means
+    an ordinary complete capture. A value that is present but cannot be read as a
+    boolean is not completion.
+    """
+    if value is _ABSENT:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        # An allowlist: an unrecognised spelling is not evidence of completion.
+        return value.strip().lower() in _TRUE_WORDS
+    return False
+
+
 def _unsupported_from(
     recorded: RecordedExchange, request: ModelRequest
 ) -> tuple[UnsupportedSetting, ...]:
@@ -741,6 +784,20 @@ def token_count(value: Any) -> int | None:
     return None
 
 
+#: Keys a catalog record may name an alias under. Both normalizers read the same set,
+#: so the same payload cannot yield two different snapshots.
+_ALIAS_KEYS: Final[tuple[str, ...]] = ("id", "alias", "slug", "name")
+
+
+def _alias_of(item: Mapping[str, Any]) -> str | None:
+    """The alias a catalog record names, or ``None`` when it names none."""
+    for key in _ALIAS_KEYS:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _route_label(value: Any) -> str:
     """The route a record names, or the default when it names none.
 
@@ -760,8 +817,8 @@ def _catalog_entry_from_raw(
     A malformed entry is skipped rather than half-parsed, and a capability the raw
     record does not mention stays false.
     """
-    alias = item.get("id") or item.get("alias") or item.get("name")
-    if not isinstance(alias, str) or not alias:
+    alias = _alias_of(item)
+    if alias is None:
         return None
     raw_caps = item.get("capabilities")
     caps = raw_caps if isinstance(raw_caps, Mapping) else {}

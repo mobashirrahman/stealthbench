@@ -1178,3 +1178,68 @@ def test_a_streamed_whitespace_only_answer_is_delivered_not_invented_away() -> N
     assert outcome.result.response == "   "
     assert outcome.result.delivery_status is DeliveryStatus.ACCEPTED
     assert outcome.failure is None
+
+
+def test_a_recorded_response_that_says_nothing_how_it_ended_is_not_a_clean_stop() -> None:
+    """The fixture route fabricated `stop` exactly as the Zen route used to."""
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "silent-finish",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "x",
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.finish_status is None, "the capture never said how it ended"
+
+
+def test_an_explicitly_recorded_finish_reason_is_kept() -> None:
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "declared-finish",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "x",
+                        "finish_status": "length",
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None
+    assert outcome.result.finish_status == "length"
+
+
+@pytest.mark.parametrize("alias_key", ["id", "alias", "slug", "name"])
+def test_the_fixture_catalog_resolves_an_alias_under_every_documented_key(
+    alias_key: str,
+) -> None:
+    """One shared vocabulary: a catalog may name an alias under any of these keys."""
+    payload = {"data": [{alias_key: "m1"}, {alias_key: "m2"}]}
+    snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "vocab",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": payload,
+            }
+        )
+    ).discover()
+    assert snapshot.aliases() == ("m1", "m2")
