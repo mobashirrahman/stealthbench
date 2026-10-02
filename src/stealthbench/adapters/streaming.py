@@ -427,10 +427,9 @@ def assemble(
     ``first_answer_seconds`` is when the response was complete enough to answer,
     which may be later when reasoning preceded it or when the stream was cut short.
 
-    ``pacing`` supplies measured per-event offsets from a real adapter. Without it,
-    timings are recorded only when no total was measured either: inventing an offset
-    from an event's position and then pairing it with a measured total would produce
-    numbers that can contradict each other and can exceed the total.
+    ``pacing`` supplies measured per-event offsets from a real adapter. Without it no
+    per-event timing is recorded at all: an event's position is not a duration, and a
+    fabricated timing is worse than a missing one.
     """
     result = StreamAssembly(total_seconds=total_seconds)
     events = list(stream)
@@ -438,9 +437,11 @@ def assemble(
     def offset(index: int) -> float | None:
         if pacing is not None:
             return pacing(index, events[index])
-        if total_seconds is not None:
-            return None
-        return float(index)
+        # With no measured pacing there is no clock, and an event's position in the
+        # stream is not a duration. Publishing the index in a seconds field would
+        # fabricate a timing -- 0.0 for the first one, which is the substitution the
+        # contract forbids.
+        return None
 
     for index, event in enumerate(events):
         result.apply(event, at_seconds=offset(index))
@@ -593,11 +594,15 @@ def parse_stream(
     route: str = "unlabeled",
     adapter: str = "stream",
     extra_secrets: Iterable[str] = (),
+    pacing: Callable[[int, StreamEvent], float | None] | None = None,
 ) -> tuple[AdapterResult, StreamAssembly]:
     """Parse, assemble and classify a complete stream in one call.
 
     ``route`` and ``adapter`` are required to be stated by the caller rather than
     inferred, so a streamed result always says which route produced it.
+
+    ``pacing`` supplies measured per-event offsets. Without it no duration is
+    recorded: a replayed capture has no clock, and an event's position is not a time.
     """
     parser = SSEParser()
     events: list[StreamEvent] = []
@@ -606,7 +611,7 @@ def parse_stream(
     tail = parser.flush()
     if tail is not None:
         events.append(tail)
-    assembly = assemble(events, total_seconds=total_seconds)
+    assembly = assemble(events, total_seconds=total_seconds, pacing=pacing)
     if sample_key is None:
         return (
             AdapterResult(failure=safe_failure(FailureKind.PROTOCOL, "no sample key supplied")),

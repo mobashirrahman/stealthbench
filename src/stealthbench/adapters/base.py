@@ -547,7 +547,7 @@ class FixtureTransport(ProviderAdapter):
                 )
             )
 
-        unsupported = _unsupported_from(recorded, request)
+        unsupported = _unsupported_from(recorded, request, extra_secrets=self.extra_secrets)
 
         if recorded.outcome == "error":
             assert recorded.failure_kind is not None
@@ -628,13 +628,31 @@ class FixtureTransport(ProviderAdapter):
                     detail=f"no recorded stream for {endpoint_id}/{benchmark_id}/{item_id}",
                 )
             )
+        unsupported = _unsupported_from(recorded, request, extra_secrets=self.extra_secrets)
+        if recorded.outcome == "error":
+            # The capture records this dispatch as a failure. Replaying its frames as
+            # an answer would turn a 429 that served no tokens into an accepted sample
+            # with a clean stop and billed token counts.
+            assert recorded.failure_kind is not None
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind(recorded.failure_kind),
+                    recorded.failure_detail or "recorded failure",
+                    http_status=recorded.http_status,
+                    retry_after_seconds=recorded.retry_after_seconds,
+                    body=recorded.error_body,
+                    extra_secrets=self.extra_secrets,
+                ),
+                unsupported=unsupported,
+            )
         if not recorded.stream_frames:
             return AdapterResult(
                 failure=safe_failure(
                     FailureKind.UNSUPPORTED_SETTING,
                     f"recorded exchange for {benchmark_id}/{item_id} carries no stream frames",
                     extra_secrets=self.extra_secrets,
-                )
+                ),
+                unsupported=unsupported,
             )
         if capabilities is not None and not capabilities.streaming:
             return AdapterResult(
@@ -642,7 +660,8 @@ class FixtureTransport(ProviderAdapter):
                     FailureKind.UNSUPPORTED_SETTING,
                     "streaming was requested but the endpoint does not advertise it",
                     extra_secrets=self.extra_secrets,
-                )
+                ),
+                unsupported=unsupported,
             )
 
         frames = b"".join(
@@ -702,14 +721,28 @@ def read_terminated(value: Any = _ABSENT) -> bool:
     return False
 
 
+def _redacted_requested(request: ModelRequest, setting: str, extra_secrets: frozenset[str]) -> Any:
+    """The requested value of a setting, defused before it can reach an artifact.
+
+    ``UnsupportedSetting.to_dict`` serializes this field verbatim, so a stop sequence
+    carrying operator-authored prompt data would otherwise bypass the declared-secret
+    mechanism that every other serialized field goes through.
+    """
+    value = _requested_value(request, setting)
+    return redact_mapping({"requested": value}, extra_secrets=extra_secrets)["requested"]
+
+
 def _unsupported_from(
-    recorded: RecordedExchange, request: ModelRequest
+    recorded: RecordedExchange,
+    request: ModelRequest,
+    *,
+    extra_secrets: frozenset[str] = frozenset(),
 ) -> tuple[UnsupportedSetting, ...]:
     """Settings the recorded endpoint declined, named with what was asked for."""
     return tuple(
         UnsupportedSetting(
             setting=name,
-            requested=_requested_value(request, name),
+            requested=_redacted_requested(request, name, extra_secrets),
             reason="the recorded endpoint does not offer this setting",
         )
         for name in recorded.unsupported_settings
@@ -806,6 +839,46 @@ def _route_label(value: Any) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else "zen"
 
 
+def _first_str(item: Mapping[str, Any], *keys: str) -> str | None:
+    """The first of ``keys`` that names a non-empty string."""
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _context_window_of(item: Mapping[str, Any]) -> int | None:
+    """A declared context window, or ``None``.
+
+    A bool is an int in Python; ``True`` as a context window would be recorded as one
+    token, which is a fabricated measurement.
+    """
+    for key in ("context_window", "context_length", "max_context"):
+        value = item.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def _capabilities_of(item: Mapping[str, Any]) -> Capabilities:
+    """Read the capabilities a raw catalog record actually advertises.
+
+    Both normalizers call this, so one payload cannot yield two different snapshots.
+    A capability the record does not mention stays false; a string or number is never
+    read as support.
+    """
+    raw_caps = item.get("capabilities")
+    caps = raw_caps if isinstance(raw_caps, Mapping) else {}
+    return Capabilities(
+        streaming=strict_flag(caps.get("streaming"), item.get("supports_streaming")),
+        tool_calls=strict_flag(caps.get("tool_calls"), item.get("supports_tools")),
+        reasoning=strict_flag(caps.get("reasoning"), item.get("supports_reasoning")),
+        usage_reporting=strict_flag(caps.get("usage_reporting"), item.get("reports_usage")),
+        logprobs=strict_flag(caps.get("logprobs"), item.get("supports_logprobs")),
+    )
+
+
 def _catalog_entry_from_raw(
     item: Mapping[str, Any],
     index: int,
@@ -820,31 +893,15 @@ def _catalog_entry_from_raw(
     alias = _alias_of(item)
     if alias is None:
         return None
-    raw_caps = item.get("capabilities")
-    caps = raw_caps if isinstance(raw_caps, Mapping) else {}
-    capabilities = Capabilities(
-        streaming=strict_flag(caps.get("streaming"), item.get("supports_streaming")),
-        tool_calls=strict_flag(caps.get("tool_calls"), item.get("supports_tools")),
-        reasoning=strict_flag(caps.get("reasoning"), item.get("supports_reasoning")),
-        usage_reporting=strict_flag(caps.get("usage_reporting"), item.get("reports_usage")),
-        logprobs=strict_flag(caps.get("logprobs")),
-    )
-    context = item.get("context_window", item.get("context_length"))
+    capabilities = _capabilities_of(item)
+    context = _context_window_of(item)
     return CatalogEntry(
         alias=alias,
         route=_route_label(item.get("route")),
-        display_name=item.get("display_name")
-        if isinstance(item.get("display_name"), str)
-        else None,
-        provider=item.get("provider") if isinstance(item.get("provider"), str) else None,
-        family=item.get("family") if isinstance(item.get("family"), str) else None,
-        # A bool is an int in Python; `True` as a context window would be recorded
-        # as 1 token, which is a fabricated measurement.
-        context_window=(
-            int(context)
-            if isinstance(context, int) and not isinstance(context, bool) and context > 0
-            else None
-        ),
+        display_name=_first_str(item, "display_name", "name"),
+        provider=_first_str(item, "provider", "owned_by"),
+        family=_first_str(item, "family"),
+        context_window=context,
         capabilities=capabilities,
         # The raw record is retained for provenance and folded into the catalog
         # digest, so it is redacted before it is ever stored.

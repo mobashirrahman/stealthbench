@@ -27,7 +27,9 @@ from typing import Any, Final
 
 from pydantic import ValidationError
 
-from stealthbench.adapters.base import _ABSENT as _ABSENT
+from stealthbench.adapters.base import (
+    _ABSENT as _ABSENT,
+)
 from stealthbench.adapters.base import (
     AdapterResult,
     CatalogEntry,
@@ -37,10 +39,13 @@ from stealthbench.adapters.base import (
     TransportFailure,
     UnsupportedSetting,
     _alias_of,
+    _capabilities_of,
+    _context_window_of,
+    _first_str,
+    _route_label,
     check_requested_settings,
     read_terminated,
     safe_failure,
-    strict_flag,
 )
 from stealthbench.schemas.campaign import Capabilities
 from stealthbench.schemas.results import (
@@ -173,30 +178,16 @@ class _CatalogNormalizer:
         if alias is None:
             return None
 
-        caps = item.get("capabilities")
-        caps_map: Mapping[str, Any] = caps if isinstance(caps, Mapping) else {}
-        capabilities = Capabilities(
-            streaming=strict_flag(caps_map.get("streaming"), item.get("supports_streaming")),
-            tool_calls=strict_flag(caps_map.get("tool_calls"), item.get("supports_tools")),
-            reasoning=strict_flag(caps_map.get("reasoning"), item.get("supports_reasoning")),
-            usage_reporting=strict_flag(caps_map.get("usage_reporting"), item.get("reports_usage")),
-            logprobs=strict_flag(caps_map.get("logprobs"), item.get("supports_logprobs")),
-        )
-        context = item.get("context_window", item.get("context_length", item.get("max_context")))
+        capabilities = _capabilities_of(item)
+        context = _context_window_of(item)
         raw_entry = _stringable(item)
         return CatalogEntry(
-            alias=alias.strip(),
+            alias=alias,
             route=_route_label(item.get("route")),
-            display_name=_opt_str(item.get("display_name", item.get("name"))),
-            provider=_opt_str(item.get("provider", item.get("owned_by"))),
-            family=_opt_str(item.get("family")),
-            # A bool is an int in Python; `True` as a context window would be stored
-            # as 1 token, which is a fabricated measurement.
-            context_window=(
-                context
-                if isinstance(context, int) and not isinstance(context, bool) and context > 0
-                else None
-            ),
+            display_name=_first_str(item, "display_name", "name"),
+            provider=_first_str(item, "provider", "owned_by"),
+            family=_first_str(item, "family"),
+            context_window=context,
             capabilities=capabilities,
             raw=redact_mapping(raw_entry, extra_secrets=extra_secrets),
         )
@@ -442,25 +433,6 @@ class ZenAdapter(ProviderAdapter):
         }
         return next(iter(aliases)) if len(aliases) == 1 else None
 
-    def _aliases_are_unambiguous(self) -> bool:
-        """Whether an endpoint-unqualified transcript key can mean only one alias.
-
-        A capture keyed ``ifeval::item-1`` against a catalog listing three aliases
-        cannot say which endpoint produced the answer. Replaying it for each of them
-        would record accepted samples for endpoint observations never dispatched.
-
-        The aliases are read through the same normalizer the snapshot uses, so the
-        two cannot disagree about what a catalog contains.
-        """
-        aliases = {
-            entry.alias
-            for entry in normalize_catalog(
-                self._catalog_payload if isinstance(self._catalog_payload, Mapping) else {}
-            ).entries
-        }
-        # No catalog evidence is ambiguity: nothing says which endpoint answered.
-        return len(aliases) == 1
-
     def _allows_unqualified(self, sample_key: SampleKey) -> bool:
         """Whether an unqualified key is bound to this sample key's endpoint.
 
@@ -484,9 +456,10 @@ class ZenAdapter(ProviderAdapter):
         them would replay one capture as a sample for every endpoint in the campaign.
         """
         yield f"{sample_key.endpoint_id}:{sample_key.task_id}#r{sample_key.repeat_id}"
-        yield f"{sample_key.task_id}#r{sample_key.repeat_id}"
         yield f"{sample_key.endpoint_id}:{sample_key.task_id}"
         if allow_unqualified:
+            # Both unqualified keys: a repeat-pinned one names no endpoint either.
+            yield f"{sample_key.task_id}#r{sample_key.repeat_id}"
             yield sample_key.task_id
 
     def complete(
@@ -507,7 +480,7 @@ class ZenAdapter(ProviderAdapter):
         )
 
         record = self._record_for(sample_key)
-        unsupported = unsupported + _recorded_unsupported(record, request)
+        unsupported = unsupported + _recorded_unsupported(record, request, self.extra_secrets)
         if record is None:
             return AdapterResult(
                 failure=TransportFailure(
@@ -609,12 +582,15 @@ class ZenAdapter(ProviderAdapter):
             request, capabilities or self._capabilities, stream=True
         )
         record = self._record_for(sample_key)
+        recorded_settings = _recorded_unsupported(record, request, self.extra_secrets)
         if record is None:
             return AdapterResult(
                 failure=safe_failure(
                     FailureKind.NO_FIXTURE,
                     f"no recorded Zen stream for {sample_key.task_id}",
-                )
+                    extra_secrets=self.extra_secrets,
+                ),
+                unsupported=unsupported,
             )
         status = record.get("http_status")
         failure_kind = map_http_status(status if isinstance(status, int) else None)
@@ -625,18 +601,41 @@ class ZenAdapter(ProviderAdapter):
                     failure_kind,
                     _detail_of(record),
                     http_status=status if isinstance(status, int) else None,
+                    # The scheduler needs the retry hint the capture recorded; dropping
+                    # it here makes the streamed path retry differently from complete().
+                    retry_after_seconds=_retry_after(record),
                     body=body if isinstance(body, Mapping) else None,
                     extra_secrets=self.extra_secrets,
-                )
+                ),
+                unsupported=unsupported + recorded_settings,
             )
         frames = record.get("stream_frames")
+        if record.get("outcome") == "error":
+            # The capture records this dispatch as a failure; its frames must not be
+            # replayed as an answer.
+            recorded_kind = record.get("failure_kind")
+            body = record.get("body") or record.get("error_body")
+            return AdapterResult(
+                failure=safe_failure(
+                    FailureKind(recorded_kind)
+                    if isinstance(recorded_kind, str)
+                    else FailureKind.SERVER_ERROR,
+                    _detail_of(record),
+                    http_status=status if isinstance(status, int) else None,
+                    retry_after_seconds=_retry_after(record),
+                    body=body if isinstance(body, Mapping) else None,
+                    extra_secrets=self.extra_secrets,
+                ),
+                unsupported=unsupported + recorded_settings,
+            )
         if not isinstance(frames, Sequence) or not frames:
             return AdapterResult(
                 failure=safe_failure(
                     FailureKind.UNSUPPORTED_SETTING,
                     "recorded Zen exchange carries no stream frames",
                     extra_secrets=self.extra_secrets,
-                )
+                ),
+                unsupported=unsupported + recorded_settings,
             )
         if capabilities is not None and not capabilities.streaming:
             return AdapterResult(
@@ -668,13 +667,15 @@ class ZenAdapter(ProviderAdapter):
         return AdapterResult(
             result=outcome.result,
             failure=outcome.failure,
-            unsupported=unsupported + _recorded_unsupported(record, request),
+            unsupported=unsupported + recorded_settings,
             effective_settings=outcome.effective_settings,
         )
 
 
 def _recorded_unsupported(
-    record: Mapping[str, Any] | None, request: ModelRequest
+    record: Mapping[str, Any] | None,
+    request: ModelRequest,
+    extra_secrets: frozenset[str] = frozenset(),
 ) -> tuple[UnsupportedSetting, ...]:
     """Settings the recorded gateway declined, named with what was asked for.
 
@@ -688,13 +689,12 @@ def _recorded_unsupported(
         return ()
     # What the request asked for, read from the request itself. Reporting a hardcoded
     # False for a setting the request set to True writes a measurement never made.
-    from stealthbench.adapters.base import _requested_settings
+    from stealthbench.adapters.base import _redacted_requested
 
-    requested = _requested_settings(request)
     return tuple(
         UnsupportedSetting(
             setting=str(name),
-            requested=requested.get(str(name)),
+            requested=_redacted_requested(request, str(name), extra_secrets),
             reason="the recorded gateway does not offer this setting",
         )
         for name in names
@@ -709,11 +709,6 @@ def _was_terminated(value: Any = _ABSENT) -> bool:
     cannot return opposite verdicts on the same capture.
     """
     return read_terminated(value)
-
-
-def _route_label(value: Any) -> str:
-    """The route a record names, or the default when it names none."""
-    return value.strip() if isinstance(value, str) and value.strip() else "zen"
 
 
 def _catalog_from_requests(requests: Any) -> Any:

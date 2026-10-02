@@ -226,24 +226,22 @@ MUTATIONS = (
     ),
     Mutation(
         "M19",
-        "review-9: a fabricated offset is paired with a measured total again",
+        "review3-9: an event index is paired with a measured total again",
         "src/stealthbench/adapters/streaming.py",
-        """        if total_seconds is not None:
-            return None
-        return float(index)""",
-        """        return float(index)""",
+        "        return None\n\n    for index, event in enumerate(events):",
+        "        return float(index)\n\n    for index, event in enumerate(events):",
         "tests/contract",
     ),
     Mutation(
         "M20",
-        "review-10: an unqualified transcript key is matched however many aliases exist",
+        "review4-3: a single alias binds the unqualified key to any endpoint",
         "src/stealthbench/adapters/zen.py",
-        """        yield f"{sample_key.endpoint_id}:{sample_key.task_id}"
-        if allow_unqualified:
-            yield sample_key.task_id""",
-        """        yield f"{sample_key.endpoint_id}:{sample_key.task_id}"
-        yield sample_key.task_id""",
-        "tests/contract",
+        (
+            "        return self._sole_alias() == sample_key.endpoint_id"
+            " and bool(sample_key.endpoint_id)"
+        ),
+        "        return self._sole_alias() is not None",
+        "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
         "M21",
@@ -270,15 +268,15 @@ MUTATIONS = (
     Mutation(
         "M23",
         "review-13: a boolean context window is recorded as a measurement",
-        "src/stealthbench/adapters/zen.py",
-        "if isinstance(context, int) and not isinstance(context, bool) and context > 0",
-        "if isinstance(context, int) and context > 0",
+        "src/stealthbench/adapters/base.py",
+        '    for key in ("context_window", "context_length", "max_context"):',
+        '    for key in ("context_window", "context_length"):',
         "tests/contract",
     ),
     Mutation(
         "M24",
         "review-14: an explicit null route becomes the string 'None'",
-        "src/stealthbench/adapters/zen.py",
+        "src/stealthbench/adapters/base.py",
         '    return value.strip() if isinstance(value, str) and value.strip() else "zen"',
         '    return str(value) if value is not None else "zen"',
         "tests/contract",
@@ -370,11 +368,8 @@ MUTATIONS = (
         "M33",
         "review3-13: a boolean context window is recorded on the fixture route again",
         "src/stealthbench/adapters/base.py",
-        (
-            "            if isinstance(context, int)"
-            " and not isinstance(context, bool) and context > 0"
-        ),
-        "            if isinstance(context, int) and context > 0",
+        '    for key in ("context_window", "context_length", "max_context"):',
+        '    for key in ("context_window", "context_length"):',
         "tests/contract/test_provider_contract.py",
     ),
     Mutation(
@@ -389,8 +384,8 @@ MUTATIONS = (
         "M35",
         "review3-7: zen recorded unsupported settings are dropped on the stream path",
         "src/stealthbench/adapters/zen.py",
-        "            unsupported=unsupported + _recorded_unsupported(record, request),",
-        "            unsupported=unsupported,",
+        "                unsupported=unsupported + recorded_settings,\n            )",
+        "                unsupported=unsupported,\n            )",
         "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
@@ -468,6 +463,73 @@ MUTATIONS = (
         """        if event.reasoning_delta:
             self.reasoning += event.reasoning_delta""",
         "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M44",
+        "review5-1 HIGH: a recorded failure replays as a streamed sample on the fixture route",
+        "src/stealthbench/adapters/base.py",
+        '        if recorded.outcome == "error":\n            # The capture records',
+        "        if False:\n            # The capture records",
+        "tests/contract",
+    ),
+    Mutation(
+        "M45",
+        "review5-2 HIGH: the unqualified repeat-pinned key bypasses the ambiguity guard",
+        "src/stealthbench/adapters/zen.py",
+        """        if allow_unqualified:
+            # Both unqualified keys: a repeat-pinned one names no endpoint either.
+            yield f"{sample_key.task_id}#r{sample_key.repeat_id}"
+            yield sample_key.task_id""",
+        """        yield f"{sample_key.task_id}#r{sample_key.repeat_id}"
+        if allow_unqualified:
+            yield sample_key.task_id""",
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M46",
+        "review5-7: a declared secret in a reported setting is serialized verbatim",
+        "src/stealthbench/adapters/base.py",
+        '    return redact_mapping({"requested": value}, extra_secrets=extra_secrets)["requested"]',
+        "    return value",
+        "tests/contract",
+    ),
+    Mutation(
+        "M47",
+        "review5-5: the two normalizers disagree on a field again",
+        "src/stealthbench/adapters/base.py",
+        '    for key in ("context_window", "context_length", "max_context"):',
+        '    for key in ("context_window", "context_length"):',
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M48",
+        "review5-6: an event index is published again as a duration in seconds",
+        "src/stealthbench/adapters/streaming.py",
+        """        # With no measured pacing there is no clock, and an event's position in the
+        # stream is not a duration. Publishing the index in a seconds field would
+        # fabricate a timing -- 0.0 for the first one, which is the substitution the
+        # contract forbids.
+        return None""",
+        "        return float(index)",
+        "tests/contract",
+    ),
+    Mutation(
+        "M49",
+        "review5-4: the streamed path drops the recorded retry hint",
+        "src/stealthbench/adapters/zen.py",
+        """                    # The scheduler needs the retry hint the capture recorded; dropping
+                    # it here makes the streamed path retry differently from complete().
+                    retry_after_seconds=_retry_after(record),""",
+        "",
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M50",
+        "review5-1 HIGH: a recorded failure replays as a streamed sample on the Zen route",
+        "src/stealthbench/adapters/zen.py",
+        '        if record.get("outcome") == "error":',
+        "        if False:",
+        "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
         "M9",

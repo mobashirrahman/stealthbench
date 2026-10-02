@@ -1243,3 +1243,121 @@ def test_the_fixture_catalog_resolves_an_alias_under_every_documented_key(
         )
     ).discover()
     assert snapshot.aliases() == ("m1", "m2")
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the fifth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_a_recorded_failure_is_never_replayed_as_a_streamed_sample() -> None:
+    """HIGH: the capture says the dispatch failed; its frames are not an answer.
+
+    The fixture schema permits an error outcome that also carries stream frames, and
+    the streaming path read only the frames, so a 429 that served no tokens became
+    an accepted sample with a clean stop and billed token counts.
+    """
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "recorded-429",
+                "capabilities": Capabilities(
+                    streaming=True,
+                    tool_calls=False,
+                    reasoning=False,
+                    usage_reporting=False,
+                    logprobs=False,
+                ).model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "outcome": "error",
+                        "failure_kind": "rate_limit",
+                        "http_status": 429,
+                        "retry_after_seconds": 30.0,
+                        "error_body": {"error": {"message": "no tokens were served"}},
+                        "stream_frames": [
+                            {"choices": [{"delta": {"content": "PARTIAL"}}]},
+                            {"choices": [], "usage": {"input_tokens": 11, "output_tokens": 7}},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    outcome = transport.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None, "a recorded failure must never become an accepted sample"
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.RATE_LIMIT
+    assert outcome.failure.http_status == 429
+    assert outcome.failure.retry_after_seconds == 30.0
+
+
+def test_a_declared_secret_in_a_reported_setting_is_redacted() -> None:
+    """UnsupportedSetting.to_dict serializes `requested` verbatim, like any field."""
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    transport = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "leaky-stop",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "response": "x",
+                        "unsupported_settings": ["stop"],
+                    }
+                ],
+            }
+        ),
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = transport.complete(
+        sample_key=key(),
+        request=request_(stop=(blind,)),
+        prompt_hash=PROMPT_HASH,
+    )
+    assert blind not in json.dumps(outcome.to_dict())
+
+
+def test_both_adapters_extract_the_same_fields_from_one_catalog_record() -> None:
+    """Two normalizers, one vocabulary: the same payload must yield one snapshot."""
+    payload = {
+        "data": [
+            {
+                "id": "alias-a",
+                "owned_by": "someone-else",
+                "name": "Alias A",
+                "max_context": 8192,
+                "supports_logprobs": True,
+            }
+        ]
+    }
+    from stealthbench.adapters.zen import ZenAdapter
+
+    fixture_snapshot = FixtureTransport(
+        FixtureBundle.model_validate(
+            {
+                "name": "fields",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "catalog": payload,
+            }
+        )
+    ).discover()
+    zen_snapshot = ZenAdapter(catalog_payload=payload).discover()
+
+    fixture_entry = fixture_snapshot.get("alias-a")
+    zen_entry = zen_snapshot.get("alias-a")
+    assert fixture_entry is not None and zen_entry is not None
+    assert fixture_entry.model_dump() == zen_entry.model_dump(), (
+        "one payload produced two different catalog entries"
+    )
+    assert fixture_entry.context_window == 8192
+    assert fixture_entry.capabilities.logprobs is True
+    assert fixture_entry.display_name == "Alias A"
+    assert fixture_entry.provider == "someone-else"

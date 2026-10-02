@@ -191,9 +191,14 @@ def test_reasoning_only_chunks_are_kept_separate() -> None:
 
 
 def test_first_content_and_first_answer_are_different_measurements() -> None:
-    """Reasoning can delay the answer; collapsing them hides the behaviour."""
+    """Reasoning can delay the answer; collapsing them hides the behaviour.
+
+    Timing is only recorded from measured pacing: with no clock there is no
+    duration, and publishing an event's position as one would be a fabricated
+    measurement.
+    """
     body = sse(reasoning("a"), reasoning("b"), delta("the "), delta("answer"), delta(" now")) + DONE
-    _outcome, assembly = parse_stream([body], sample_key=key())
+    _outcome, assembly = parse_stream([body], sample_key=key(), pacing=_by_index)
     assert assembly.first_content_seconds is not None
     assert assembly.first_answer_seconds is not None
     assert assembly.first_content_seconds < assembly.first_answer_seconds, (
@@ -204,9 +209,23 @@ def test_first_content_and_first_answer_are_different_measurements() -> None:
 def test_a_single_content_delta_makes_the_two_timings_equal() -> None:
     """With one text delta there is nothing between the two events."""
     _outcome, assembly = parse_stream(
-        [sse(reasoning("think"), delta("done")) + DONE], sample_key=key()
+        [sse(reasoning("think"), delta("done")) + DONE], sample_key=key(), pacing=_by_index
     )
     assert assembly.first_content_seconds == assembly.first_answer_seconds
+
+
+def test_no_timing_is_recorded_without_a_clock() -> None:
+    """Neither adapter measures time, so a streamed artifact records no durations.
+
+    Publishing the frame index under a seconds field would record 0.0 for the first
+    event, which is exactly the substitution the contract forbids.
+    """
+    body = sse(reasoning("a"), delta("the answer")) + DONE
+    _outcome, assembly = parse_stream([body], sample_key=key())
+    assert assembly.first_content_seconds is None
+    assert assembly.first_answer_seconds is None
+    assert assembly.total_seconds is None
+    assert assembly.chunk_count == 3
 
 
 def test_reasoning_chunks_are_classified_separately_from_text() -> None:
@@ -410,13 +429,18 @@ def test_a_non_object_payload_is_classified_unknown() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _by_index(index: int, _event: StreamEvent) -> float:
+    """Stand-in for an adapter that measured each event's arrival."""
+    return float(index)
+
+
 def test_assembly_reports_ordered_timings() -> None:
     events = [
         StreamEvent(kind=StreamEventKind.DELTA, content_delta="a"),
         StreamEvent(kind=StreamEventKind.DELTA, content_delta="b"),
         StreamEvent(kind=StreamEventKind.DONE),
     ]
-    assembly = assemble(events, total_seconds=3.0, pacing=lambda index, _event: float(index))
+    assembly = assemble(events, total_seconds=3.0, pacing=_by_index)
     assert assembly.chunk_count == 3
     assert assembly.first_content_seconds == 0.0
     assert assembly.first_answer_seconds == 1.0

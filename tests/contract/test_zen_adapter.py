@@ -1354,3 +1354,129 @@ def test_both_adapters_read_an_alias_under_the_same_keys() -> None:
             )
         )
         assert zen_aliases == fixture.discover().aliases(), key
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the fifth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_an_unqualified_repeat_pinned_key_is_refused_when_ambiguous() -> None:
+    """HIGH: the `#r<n>` key names no endpoint either, so the same guard applies.
+
+    One capture under `bench::item-1#r1` was replayed as an accepted sample for every
+    endpoint in the campaign.
+    """
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}, {"id": "alias-b"}, {"id": "alias-c"}]},
+        exchanges={
+            "bench::item-1#r1": {"http_status": 200, "json": chat_payload()},
+        },
+    )
+    # The key really is there: a matching endpoint-unqualified record would answer.
+    assert "bench::item-1#r1" in instance._exchanges
+    accepted = [
+        endpoint
+        for endpoint in ("alias-a", "alias-b", "alias-c")
+        if instance.complete(
+            sample_key=key("bench::item-1", endpoint=endpoint),
+            request=request_(),
+            prompt_hash=PROMPT_HASH,
+        ).ok
+    ]
+    assert accepted == [], f"one capture became samples for {accepted}"
+
+
+def test_an_unqualified_repeat_pinned_key_is_used_when_bound() -> None:
+    """The control: a bound adapter replays its own repeat-pinned capture."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1#r2": {"http_status": 200, "json": chat_payload()},
+        }
+    )
+    assert instance.complete(
+        sample_key=key(endpoint="alias-a", repeat=2), request=request_(), prompt_hash=PROMPT_HASH
+    ).ok
+
+
+def test_a_recorded_failure_is_never_replayed_as_a_streamed_sample() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "outcome": "error",
+                "failure_kind": "server_error",
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "PARTIAL"}}]},
+                    {"choices": [], "usage": {"input_tokens": 11, "output_tokens": 7}},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+
+
+def test_the_streaming_path_keeps_the_recorded_retry_hint() -> None:
+    """The scheduler needs the retry delay the capture recorded."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": "7"},
+                "body": {"error": {"message": "slow down"}},
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.RATE_LIMIT
+    assert outcome.failure.retry_after_seconds == 7.0
+
+
+def test_the_streaming_path_keeps_the_recorded_unsupported_settings() -> None:
+    """A refusal must still say what the endpoint declined."""
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": "3"},
+                "unsupported_settings": ["seed"],
+                "body": {"error": {"message": "slow down"}},
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(seed=7),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.failure is not None
+    assert [item.setting for item in outcome.unsupported] == ["seed"]
+    assert outcome.unsupported[0].requested == 7
+
+
+def test_a_declared_secret_in_a_reported_setting_is_redacted() -> None:
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["stop"],
+            }
+        },
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = instance.complete(
+        sample_key=key(), request=request_(stop=(blind,)), prompt_hash=PROMPT_HASH
+    )
+    assert blind not in json.dumps(outcome.to_dict())
