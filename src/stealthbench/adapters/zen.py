@@ -361,8 +361,10 @@ class ZenAdapter(ProviderAdapter):
         exchanges: Mapping[str, Mapping[str, Any]] | None = None,
         extra_secrets: frozenset[str] = frozenset(),
         catalog_source: str = ZEN_BASE_URL,
+        endpoint_id: str | None = None,
     ) -> None:
         self.adapter_version = ZEN_ADAPTER_VERSION
+        self._endpoint_id = endpoint_id
         self._catalog_payload = catalog_payload
         self._exchanges: dict[str, Mapping[str, Any]] = dict(exchanges or {})
         self.extra_secrets = extra_secrets
@@ -392,11 +394,13 @@ class ZenAdapter(ProviderAdapter):
         catalog = raw.get("catalog")
         if catalog is None:
             catalog = _catalog_from_requests(raw.get("requests"))
+        bound = raw.get("endpoint_id")
         return cls(
             catalog_payload=catalog,
             exchanges=raw.get("exchanges"),
             catalog_source=str(raw.get("catalog_source", ZEN_BASE_URL)),
             extra_secrets=extra_secrets,
+            endpoint_id=bound if isinstance(bound, str) and bound.strip() else None,
         )
 
     def discover(self) -> CatalogSnapshot:
@@ -413,7 +417,7 @@ class ZenAdapter(ProviderAdapter):
         )
 
     def _record_for(self, sample_key: SampleKey) -> Mapping[str, Any] | None:
-        allow_unqualified = self._unqualified_keys_allowed()
+        allow_unqualified = self._allows_unqualified(sample_key)
         for candidate in self._candidate_keys(sample_key, allow_unqualified=allow_unqualified):
             record = self._exchanges.get(candidate)
             if record is not None:
@@ -426,21 +430,27 @@ class ZenAdapter(ProviderAdapter):
         A capture keyed ``ifeval::item-1`` against a catalog listing three aliases
         cannot say which endpoint produced the answer. Replaying it for each of them
         would record accepted samples for endpoint observations never dispatched.
-        """
-        payload = self._catalog_payload
-        if not isinstance(payload, Mapping):
-            return True
-        models = payload.get("data", payload.get("models"))
-        if not isinstance(models, Sequence) or isinstance(models, (str, bytes)):
-            return True
-        aliases = {
-            item.get("id")
-            for item in models
-            if isinstance(item, Mapping) and isinstance(item.get("id"), str)
-        }
-        return len(aliases) <= 1
 
-    def _unqualified_keys_allowed(self) -> bool:
+        The aliases are read through the same normalizer the snapshot uses, so the
+        two cannot disagree about what a catalog contains.
+        """
+        aliases = {
+            entry.alias
+            for entry in normalize_catalog(
+                self._catalog_payload if isinstance(self._catalog_payload, Mapping) else {}
+            ).entries
+        }
+        # No catalog evidence is ambiguity: nothing says which endpoint answered.
+        return len(aliases) == 1
+
+    def _allows_unqualified(self, sample_key: SampleKey) -> bool:
+        """Whether an unqualified key is bound to this sample key's endpoint.
+
+        Either the adapter was built for a named endpoint and this sample is for it,
+        or the capture's catalog holds exactly one alias. Anything else is ambiguous.
+        """
+        if self._endpoint_id is not None:
+            return self._endpoint_id == sample_key.endpoint_id
         return self._aliases_are_unambiguous()
 
     @staticmethod
@@ -625,7 +635,7 @@ class ZenAdapter(ProviderAdapter):
         )
         # A capture whose connection died never sent the sentinel; replaying it as
         # terminated would report a truncated answer as a completed one.
-        if record.get("stream_terminated", True) is not False:
+        if "stream_terminated" not in record or _was_terminated(record["stream_terminated"]):
             raw += b"data: [DONE]\n\n"
         outcome, _assembly = parse_stream(
             [raw],
@@ -658,13 +668,11 @@ def _recorded_unsupported(
     names = record.get("unsupported_settings")
     if not isinstance(names, Sequence) or isinstance(names, (str, bytes)):
         return ()
-    requested = {
-        "stream": False,
-        "stop": request.stop,
-        "temperature": request.temperature,
-        "top_p": request.top_p,
-        "max_output_tokens": request.max_output_tokens,
-    }
+    # What the request asked for, read from the request itself. Reporting a hardcoded
+    # False for a setting the request set to True writes a measurement never made.
+    from stealthbench.adapters.base import _requested_settings
+
+    requested = _requested_settings(request)
     return tuple(
         UnsupportedSetting(
             setting=str(name),
@@ -674,6 +682,23 @@ def _recorded_unsupported(
         for name in names
         if isinstance(name, str)
     )
+
+
+_ABSENT: Final = object()
+
+
+def _was_terminated(value: Any = _ABSENT) -> bool:
+    """Whether a capture recorded its terminating sentinel.
+
+    An absent field means the capture was an ordinary complete one, which is what the
+    fixture schema's own default means. A field that is present but not a real ``True``
+    (``0``, ``"false"``, ``None``) is read the way the fixture schema coerces it --
+    as not terminated -- so the two adapters cannot return opposite verdicts on the
+    same capture.
+    """
+    if value is _ABSENT:
+        return True
+    return isinstance(value, bool) and value
 
 
 def _route_label(value: Any) -> str:

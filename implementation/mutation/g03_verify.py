@@ -6,6 +6,9 @@ Every mutation must FAIL the suite. A mutation that passes is a missing guard.
 
 from __future__ import annotations
 
+import atexit
+import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -147,8 +150,11 @@ MUTATIONS = (
         "M11",
         "review-1 CRITICAL: the Zen path synthesises data: [DONE] again",
         "src/stealthbench/adapters/zen.py",
-        '        if record.get("stream_terminated", True) is not False:',
-        "        if True:",
+        (
+            '        if "stream_terminated" not in record '
+            'or _was_terminated(record["stream_terminated"]):'
+        ),
+        '        if "stream_terminated" not in record or True:',
         "tests/contract",
     ),
     Mutation(
@@ -286,6 +292,104 @@ MUTATIONS = (
         "tests/contract",
     ),
     Mutation(
+        "M26",
+        "review3-1: the alias guard counts id only and allows zero or one",
+        "src/stealthbench/adapters/zen.py",
+        """        aliases = {
+            entry.alias
+            for entry in normalize_catalog(
+                self._catalog_payload if isinstance(self._catalog_payload, Mapping) else {}
+            ).entries
+        }""",
+        """        payload = self._catalog_payload
+        models = payload.get("data", []) if isinstance(payload, Mapping) else []
+        aliases = {
+            item.get("id")
+            for item in models
+            if isinstance(item, Mapping) and item.get("id")
+        }
+        return len(aliases) <= 1""",
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M27",
+        "review3-6: a non-True stream_terminated is read as terminated again",
+        "src/stealthbench/adapters/zen.py",
+        "    return isinstance(value, bool) and value",
+        "    return value is not False",
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M28",
+        "review3-7: a later reported count overwrites an earlier one again",
+        "src/stealthbench/adapters/streaming.py",
+        "            into.output_tokens if into.output_tokens is not None else newer.output_tokens",
+        (
+            "            newer.output_tokens"
+            " if newer.output_tokens is not None else into.output_tokens"
+        ),
+        "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M29",
+        "review3-5: str.splitlines truncates a record on a unicode separator again",
+        "src/stealthbench/adapters/streaming.py",
+        "        for line in _sse_lines(raw_record):",
+        "        for line in raw_record.splitlines():",
+        "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M30",
+        "review3-4: an implausible pacing offset is stored instead of dropped",
+        "src/stealthbench/adapters/streaming.py",
+        "        streaming=_coherent_measurements(assembly),",
+        "        streaming=assembly.measurements(),",
+        "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M31",
+        "review3-2: a terminated capture with no usable frames is accepted again",
+        "src/stealthbench/adapters/streaming.py",
+        "    if not assembly.saw_content and not assembly.usage.provider_reported:",
+        "    if False:",
+        "tests/contract",
+    ),
+    Mutation(
+        "M32",
+        "review3-3: the requested value of stream is fabricated as False again",
+        "src/stealthbench/adapters/base.py",
+        '        "stream": request.stream,',
+        '        "stream": False,',
+        "tests/contract",
+    ),
+    Mutation(
+        "M33",
+        "review3-13: a boolean context window is recorded on the fixture route again",
+        "src/stealthbench/adapters/base.py",
+        (
+            "            if isinstance(context, int)"
+            " and not isinstance(context, bool) and context > 0"
+        ),
+        "            if isinstance(context, int) and context > 0",
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M34",
+        "review3-14: an explicit null route becomes the string 'None' on the fixture route",
+        "src/stealthbench/adapters/base.py",
+        '    return value.strip() if isinstance(value, str) and value.strip() else "zen"',
+        '    return str(value) if value is not None else "zen"',
+        "tests/contract/test_provider_contract.py",
+    ),
+    Mutation(
+        "M35",
+        "review3-7: zen recorded unsupported settings are dropped on the stream path",
+        "src/stealthbench/adapters/zen.py",
+        "            unsupported=unsupported + _recorded_unsupported(record, request),",
+        "            unsupported=unsupported,",
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
         "M9",
         "new: the catalog is not read from the recorded GET /models response",
         "src/stealthbench/adapters/zen.py",
@@ -296,8 +400,31 @@ MUTATIONS = (
 )
 
 
+def _restore_on_exit(target: Path, original: str):
+    """Return a callable that restores ``target``; also armed at exit and on signals."""
+
+    def restore() -> None:
+        try:
+            if target.read_text(encoding="utf-8") != original:
+                target.write_text(original, encoding="utf-8")
+                emit(f"restored {target.relative_to(ROOT)}")
+        except OSError:
+            pass
+
+    atexit.register(restore)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda signum, _frame: (restore(), sys.exit(128 + signum)))
+    return restore
+
+
 def run(args: list[str]) -> tuple[int, str]:
-    proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=False, timeout=900)
+    # Bytecode caching is disabled: a cached .pyc whose mtime and size still match the
+    # mutated source would make the mutation invisible, and the run would pass for the
+    # wrong reason. A mutation harness must be certain it tested what it wrote.
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    proc = subprocess.run(
+        args, cwd=ROOT, capture_output=True, text=True, check=False, timeout=900, env=env
+    )
     return proc.returncode, (proc.stdout + proc.stderr)[-1500:]
 
 
@@ -319,12 +446,15 @@ def main() -> int:
         target.write_text(
             original.replace(mutation.old, mutation.new, mutation.count), encoding="utf-8"
         )
+        # Restore on any exit, including an interrupt that skips the finally block:
+        # a reviewer who times this script out must not be left with a mutated adapter.
+        restore = _restore_on_exit(target, original)
         try:
             code, out = run(
                 [PY, "-m", "pytest", "--strict-markers", "-q", "-x", *mutation.tests.split()]
             )
         finally:
-            target.write_text(original, encoding="utf-8")
+            restore()
         if code != 0:
             emit(f"{mutation.ident} PASS  caught ({mutation.defect})")
         else:

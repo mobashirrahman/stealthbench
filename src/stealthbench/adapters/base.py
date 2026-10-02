@@ -50,8 +50,14 @@ FIXTURE_SCHEMA_VERSION: Final[str] = "1.0"
 
 #: Generation settings an adapter may be asked to honour. Anything outside this set is
 #: a caller bug rather than an unsupported feature.
+#: The settings a request may carry. ``ModelRequest`` is closed, so this is a
+#: restatement of the schema rather than a separate source of truth; the assertion
+#: below keeps the two from drifting apart silently.
 KNOWN_SETTINGS: Final[frozenset[str]] = frozenset(
     {"max_output_tokens", "temperature", "top_p", "seed", "stream", "stop"}
+)
+assert set(ModelRequest.model_fields) - {"messages"} == KNOWN_SETTINGS, (
+    "the reported setting vocabulary must match the closed request schema"
 )
 
 
@@ -319,7 +325,6 @@ def check_requested_settings(
     happened.
     """
     unsupported: list[UnsupportedSetting] = []
-    requested = _requested_settings(request)
     if capabilities is not None and stream and not capabilities.streaming:
         unsupported.append(
             UnsupportedSetting(
@@ -328,26 +333,7 @@ def check_requested_settings(
                 reason="the endpoint's catalog does not advertise streaming",
             )
         )
-    # A requested setting outside the documented vocabulary cannot be checked against
-    # a capability, so it is named rather than silently treated as supported.
-    for setting in sorted(set(requested) - KNOWN_SETTINGS):
-        unsupported.append(
-            UnsupportedSetting(
-                setting=setting, requested=requested[setting], reason="unknown setting"
-            )
-        )
     return tuple(unsupported)
-
-
-def _requested_settings(request: ModelRequest) -> dict[str, Any]:
-    """The settings this request asks for, as reportable values."""
-    return {
-        "max_output_tokens": request.max_output_tokens,
-        "temperature": request.temperature,
-        "top_p": request.top_p,
-        "seed": request.seed,
-        "stop": request.stop,
-    }
 
 
 def failed_result(
@@ -688,14 +674,23 @@ def _unsupported_from(
 
 
 def _requested_value(request: ModelRequest, setting: str) -> Any:
-    values: dict[str, Any] = {
-        "stream": False,
-        "stop": request.stop,
+    """What the request actually asked for, or ``None`` when it asked for nothing.
+
+    Reporting ``False`` for a setting the request set to ``True`` (or omitting one it
+    did set) writes a measurement into the artifact that was never made.
+    """
+    return _requested_settings(request).get(setting)
+
+
+def _requested_settings(request: ModelRequest) -> dict[str, Any]:
+    return {
+        "stream": request.stream,
+        "max_output_tokens": request.max_output_tokens,
         "temperature": request.temperature,
         "top_p": request.top_p,
-        "max_output_tokens": request.max_output_tokens,
+        "seed": request.seed,
+        "stop": list(request.stop),
     }
-    return values.get(setting)
 
 
 def _usage_from(recorded: RecordedExchange) -> Usage:

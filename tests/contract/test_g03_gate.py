@@ -105,6 +105,7 @@ def _adapters() -> list[FixtureTransport | ZenAdapter]:
         ZenAdapter(
             catalog_payload={"data": [{"id": "alias-a"}]},
             exchanges={"ifeval::item-1": {"http_status": 200, "json": chat()}},
+            endpoint_id="alias-a",
         ),
     ]
 
@@ -230,13 +231,14 @@ def test_no_adapter_leaks_a_credential_through_a_known_header() -> None:
     from stealthbench.storage.events import REDACTED
 
     adapter = ZenAdapter(
+        endpoint_id="alias-a",
         exchanges={
             "ifeval::item-1": {
                 "http_status": 403,
                 "headers": {"authorization": "opaque"},
                 "body": {"headers": {"Authorization": "opaque", "accept": "application/json"}},
             }
-        }
+        },
     )
     outcome = adapter.complete(sample_key=key(), request=request_(), prompt_hash="a" * 64)
     body = outcome.failure.body
@@ -451,12 +453,13 @@ def test_usage_absence_survives_every_adapter() -> None:
         assert result.usage.provider_reported is True
 
     bare = ZenAdapter(
+        endpoint_id="alias-a",
         exchanges={
             "ifeval::item-1": {
                 "http_status": 200,
                 "json": {"choices": [{"message": {"content": "x"}, "finish_reason": "stop"}]},
             }
-        }
+        },
     ).complete(sample_key=key(), request=request_(), prompt_hash="a" * 64)
     assert bare.result is not None
     assert bare.result.usage.input_tokens is None

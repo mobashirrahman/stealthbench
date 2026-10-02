@@ -24,6 +24,7 @@ from stealthbench.adapters.streaming import (
     classify_chunk,
     decode_stream_bytes,
     parse_stream,
+    streamed_result,
 )
 from stealthbench.schemas.campaign import Capabilities
 from stealthbench.schemas.results import ModelRequest, SampleKey, Usage
@@ -974,3 +975,154 @@ def test_usage_on_a_contentless_terminal_record_is_kept() -> None:
     assert outcome.result.finish_status == "stop"
     assert outcome.result.usage.input_tokens == 13
     assert outcome.result.usage.output_tokens == 5
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the third G03 review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"])
+def test_a_unicode_line_separator_inside_content_does_not_truncate_the_record(
+    separator: str,
+) -> None:
+    """SSE terminates lines at CR and LF only; JSON permits these raw in a string.
+
+    ``str.splitlines`` also breaks here, which truncated the record: the answer was
+    lost and a mid-stream error frame was silently downgraded to an interruption.
+    """
+    payload = json.dumps(
+        {"choices": [{"delta": {"content": f"A{separator}B"}, "finish_reason": "stop"}]},
+        ensure_ascii=False,
+    )
+    body = f"data: {payload}\n\n".encode() + b"data: [DONE]\n\n"
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.content == f"A{separator}B"
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == f"A{separator}B"
+
+
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"])
+def test_a_unicode_line_separator_does_not_defeat_the_error_frame_guard(
+    separator: str,
+) -> None:
+    payload = json.dumps(
+        {"error": {"message": f"upstream{separator}overloaded"}}, ensure_ascii=False
+    )
+    outcome, _ = parse_stream([f"data: {payload}\n\n".encode()], sample_key=key(), route="zen")
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL, "the endpoint reported an error"
+    assert "overloaded" in outcome.failure.detail
+
+
+def test_crlf_framing_still_splits_after_the_line_splitter_change() -> None:
+    from stealthbench.adapters.streaming import _sse_lines
+
+    assert _sse_lines("a\r\nb\rc\nd") == ["a", "b", "c", "d"]
+
+
+@pytest.mark.parametrize("offset", [5.0, -1.0, float("nan"), float("inf")])
+def test_an_implausible_pacing_offset_is_dropped_rather_than_raising(offset: float) -> None:
+    """A caller-supplied pacing function must not take the campaign down."""
+    events = [
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="x"),
+        StreamEvent(kind=StreamEventKind.DONE),
+    ]
+    assembly = assemble(events, total_seconds=1.0, pacing=lambda _i, _e: offset)
+    outcome = streamed_result(
+        sample_key=key(), attempt_id="a", attempt_number=1, assembly=assembly, route="zen"
+    )
+    assert outcome.ok
+    assert outcome.result is not None
+    measurements = outcome.result.streaming
+    assert measurements is not None
+    assert measurements.first_content_seconds is None, offset
+
+
+def test_an_offset_past_the_measured_total_is_dropped() -> None:
+    events = [
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="x"),
+        StreamEvent(kind=StreamEventKind.DONE),
+    ]
+    assembly = assemble(events, total_seconds=1.0, pacing=lambda _i, _e: 5.0)
+    outcome = streamed_result(
+        sample_key=key(), attempt_id="a", attempt_number=1, assembly=assembly, route="zen"
+    )
+    assert outcome.result is not None
+    measurements = outcome.result.streaming
+    assert measurements is not None
+    assert measurements.first_content_seconds is None
+    assert measurements.total_seconds == 1.0
+
+
+def test_content_cannot_be_recorded_after_the_first_answer() -> None:
+    """An incoherent pair is not stored; the impossible half is dropped instead."""
+    events = [
+        StreamEvent(kind=StreamEventKind.DELTA, content_delta="x"),
+        StreamEvent(kind=StreamEventKind.DONE),
+    ]
+    # first content at 0.9, first answer at 0.1
+    assembly = assemble(events, total_seconds=1.0, pacing=lambda index, _e: (0.9, 0.1)[index])
+    outcome = streamed_result(
+        sample_key=key(), attempt_id="a", attempt_number=1, assembly=assembly, route="zen"
+    )
+    assert outcome.result is not None
+    measurements = outcome.result.streaming
+    assert measurements is not None
+    assert not (
+        measurements.first_content_seconds is not None
+        and measurements.first_answer_seconds is not None
+        and measurements.first_content_seconds > measurements.first_answer_seconds
+    )
+
+
+def test_a_first_reported_token_count_is_not_overwritten_by_a_terminal_zero() -> None:
+    """Last-wins would turn a reported 100 into the forbidden zero."""
+    body = (
+        b'data: {"choices":[],"usage":{"output_tokens":100}}\n\n'
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+        b'"usage":{"output_tokens":0}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.usage.output_tokens == 100
+
+
+def test_usage_still_fills_in_from_a_later_frame_when_the_first_is_silent() -> None:
+    body = (
+        b'data: {"choices":[],"usage":{"input_tokens":11}}\n\n'
+        b'data: {"choices":[{"delta":{"content":"a"},"finish_reason":"stop"}],'
+        b'"usage":{"output_tokens":7}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.usage.input_tokens == 11
+    assert outcome.result.usage.output_tokens == 7
+
+
+def test_a_terminated_capture_with_no_usable_frames_is_refused() -> None:
+    """A sentinel and nothing else is not a completed empty answer."""
+    outcome, _ = parse_stream([b"data: [DONE]\n\n"], sample_key=key(), route="zen")
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
+
+
+def test_a_capture_whose_frames_are_all_empty_objects_is_refused() -> None:
+    body = b"data: {}\n\ndata: {}\n\ndata: [DONE]\n\n"
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert not outcome.ok
+    assert outcome.failure is not None
+
+
+def test_a_usage_only_capture_is_still_accepted() -> None:
+    """Reported usage is content for this purpose: the endpoint did answer."""
+    body = b'data: {"choices":[],"usage":{"input_tokens":3,"output_tokens":1}}\n\ndata: [DONE]\n\n'
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.usage.output_tokens == 1

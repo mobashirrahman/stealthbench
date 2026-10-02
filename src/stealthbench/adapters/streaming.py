@@ -20,6 +20,7 @@ import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from math import isfinite
 from typing import Any, Final
 
 from stealthbench.adapters.base import (
@@ -82,14 +83,18 @@ class StreamAssembly:
     saw_done: bool = False
     error: dict[str, Any] | None = None
     error_message: str | None = None
+    #: Whether any frame carried content, reasoning or a usage report.
+    saw_content: bool = False
 
     def apply(self, event: StreamEvent, *, at_seconds: float | None) -> None:
         self.chunk_count += 1
         if event.content_delta:
             if self.first_content_seconds is None and at_seconds is not None:
                 self.first_content_seconds = at_seconds
+            self.saw_content = True
             self.content += event.content_delta
         if event.reasoning_delta:
+            self.saw_content = True
             self.reasoning += event.reasoning_delta
         # Any record may carry the terminal reason; a reason-only record and a final
         # content record both deliver it.
@@ -125,6 +130,36 @@ class StreamAssembly:
         if self.usage.output_tokens is None or not self.total_seconds:
             return None
         return self.usage.output_tokens / self.total_seconds
+
+
+def _sse_lines(record: str) -> list[str]:
+    """Split a record on CR and LF only.
+
+    ``str.splitlines`` also breaks on U+0085, U+2028, U+2029 and the C0 separators,
+    none of which terminate an SSE line. A model is free to emit them inside a JSON
+    string, and splitting there truncates the record: the answer is lost and a
+    mid-stream error frame silently becomes an interruption.
+    """
+    lines: list[str] = []
+    current: list[str] = []
+    index = 0
+    length = len(record)
+    while index < length:
+        char = record[index]
+        if char == "\r":
+            lines.append("".join(current))
+            current = []
+            index += 2 if record[index + 1 : index + 2] == "\n" else 1
+            continue
+        if char == "\n":
+            lines.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    lines.append("".join(current))
+    return lines
 
 
 class SSEParser:
@@ -189,7 +224,7 @@ class SSEParser:
             # The stream ended on a bare CR, which is itself a line terminator.
             self._buffer += "\n"
             self._pending_cr = False
-        remainder = self._buffer.replace("\r\n", "\n").replace("\r", "\n").strip()
+        remainder = self._buffer.replace("\r\n", "\n").replace("\r", "\n").strip(" \t\n")
         self._buffer = ""
         if not remainder:
             return None
@@ -201,7 +236,7 @@ class SSEParser:
 
     def _parse_record(self, raw_record: str) -> StreamEvent | None:
         data_lines: list[str] = []
-        for line in raw_record.splitlines():
+        for line in _sse_lines(raw_record):
             stripped = line.strip()
             if not stripped or stripped.startswith(":"):
                 continue
@@ -224,21 +259,26 @@ class SSEParser:
 def _merge_usage(into: Usage, newer: Usage) -> Usage:
     """Fold newly reported counts into what was already known.
 
-    Some gateways split usage across frames. Overwriting would discard the half that
-    arrived first, turning a reported count into a missing one.
+    Some gateways split usage across frames, so a field the first frame left absent is
+    filled in from a later one.
+
+    A field that is already reported is kept. Last-wins would let a terminal frame
+    carrying ``0`` overwrite a real reported count, turning a measurement into the
+    forbidden zero; where a gateway contradicts itself the earlier report is retained
+    rather than silently replaced.
     """
     return Usage(
-        input_tokens=newer.input_tokens if newer.input_tokens is not None else into.input_tokens,
+        input_tokens=into.input_tokens if into.input_tokens is not None else newer.input_tokens,
         output_tokens=(
-            newer.output_tokens if newer.output_tokens is not None else into.output_tokens
+            into.output_tokens if into.output_tokens is not None else newer.output_tokens
         ),
         cached_input_tokens=(
-            newer.cached_input_tokens
-            if newer.cached_input_tokens is not None
-            else into.cached_input_tokens
+            into.cached_input_tokens
+            if into.cached_input_tokens is not None
+            else newer.cached_input_tokens
         ),
         reasoning_tokens=(
-            newer.reasoning_tokens if newer.reasoning_tokens is not None else into.reasoning_tokens
+            into.reasoning_tokens if into.reasoning_tokens is not None else newer.reasoning_tokens
         ),
         provider_reported=into.provider_reported or newer.provider_reported,
     )
@@ -416,6 +456,45 @@ def assemble(
     return result
 
 
+def _coherent_measurements(assembly: StreamAssembly) -> StreamingMeasurements:
+    """Measurements that cannot all be true together are dropped, not clamped.
+
+    A caller-supplied pacing function can pair an offset past the measured total, or
+    produce a negative, infinite or NaN offset. Clamping would invent a coincidence;
+    raising would take the campaign down on a timing artefact. An offset that is not a
+    finite number inside the stream's own window is simply not recorded.
+    """
+
+    def usable(value: float | None) -> float | None:
+        if value is None or not isfinite(value) or value < 0:
+            return None
+        total = assembly.total_seconds
+        if total is not None and (not isfinite(total) or value > total):
+            return None
+        return value
+
+    total = assembly.total_seconds
+    measurements = StreamingMeasurements(
+        first_content_seconds=usable(assembly.first_content_seconds),
+        first_answer_seconds=usable(assembly.first_answer_seconds),
+        total_seconds=usable(total),
+        chunk_count=assembly.chunk_count,
+    )
+    # first_content cannot follow first_answer; if it somehow does, neither is sound.
+    if (
+        measurements.first_content_seconds is not None
+        and measurements.first_answer_seconds is not None
+        and measurements.first_content_seconds > measurements.first_answer_seconds
+    ):
+        return StreamingMeasurements(
+            first_content_seconds=None,
+            first_answer_seconds=measurements.first_answer_seconds,
+            total_seconds=measurements.total_seconds,
+            chunk_count=assembly.chunk_count,
+        )
+    return measurements
+
+
 def streamed_result(
     *,
     sample_key: Any,
@@ -456,6 +535,19 @@ def streamed_result(
                 body=None,
             ),
         )
+    if not assembly.saw_content and not assembly.usage.provider_reported:
+        # The stream was terminated but carried nothing at all. Accepting it would
+        # invent a sample with no answer: the frames were absent or unusable, not
+        # empty in fact.
+        return AdapterResult(
+            result=None,
+            failure=safe_failure(
+                FailureKind.PROTOCOL,
+                "the recorded stream was terminated but carried no usable frames",
+                body=None,
+                extra_secrets=frozenset(extra_secrets),
+            ),
+        )
     from stealthbench.schemas.results import GenerationResult
 
     # Map through the shared vocabulary so a reason the frozen contract does not
@@ -468,7 +560,7 @@ def streamed_result(
         delivery_status=DeliveryStatus.ACCEPTED,
         response=assembly.content,
         usage=assembly.usage,
-        streaming=assembly.measurements(),
+        streaming=_coherent_measurements(assembly),
         finish_status=finish,
         manifest_hash=manifest_hash,
         redacted_provider_metadata={

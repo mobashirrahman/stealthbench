@@ -72,9 +72,12 @@ def chat_payload(**overrides: object) -> dict[str, object]:
 
 
 def adapter(**overrides: object) -> ZenAdapter:
+    # The adapter is bound to one endpoint, so an endpoint-unqualified transcript key
+    # is unambiguous rather than a capture replayed for every alias.
     payload: dict[str, object] = {
         "catalog_payload": {"data": []},
         "exchanges": {},
+        "endpoint_id": "alias-a",
     }
     payload.update(overrides)
     return ZenAdapter(**payload)  # type: ignore[arg-type]
@@ -1062,3 +1065,165 @@ def test_an_explicit_route_label_survives_on_the_zen_route() -> None:
     entry = snapshot.get("m")
     assert entry is not None
     assert entry.route == "eu-west"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the third G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_an_unqualified_key_is_refused_for_a_slug_keyed_catalog() -> None:
+    """The ambiguity guard counted `id` only, while the snapshot reads id/alias/slug."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"slug": "alias-a"}, {"slug": "alias-b"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    for endpoint in ("alias-a", "alias-b"):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint), request=request_(), prompt_hash=PROMPT_HASH
+        )
+        assert not outcome.ok, f"{endpoint} inherited another endpoint's capture"
+
+
+def test_an_unqualified_key_is_refused_for_an_alias_keyed_catalog() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"alias": "alias-a"}, {"alias": "alias-b"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    outcome = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert not outcome.ok
+
+
+def test_an_unqualified_key_is_refused_when_the_capture_has_no_catalog() -> None:
+    """No catalog is no evidence of which endpoint answered, which is maximal ambiguity."""
+    instance = ZenAdapter(
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}}
+    )
+    for endpoint in ("alias-a", "alias-b"):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint), request=request_(), prompt_hash=PROMPT_HASH
+        )
+        assert not outcome.ok, endpoint
+
+
+def test_an_unqualified_key_is_bound_to_the_endpoint_the_adapter_was_built_for() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}})
+    mine = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    theirs = instance.complete(
+        sample_key=key(endpoint="alias-b"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert mine.ok
+    assert not theirs.ok, "a capture bound to alias-a must not answer for alias-b"
+
+
+def test_a_single_alias_catalog_needs_no_binding() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    assert instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH).ok
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [
+        [None],
+        ["junk"],
+        [{}],
+        [{}, {}],
+        [None, None],
+    ],
+    ids=["none", "string", "empty-dict", "two-empty-dicts", "two-nones"],
+)
+def test_a_capture_with_no_usable_frames_is_refused(frames: list[object]) -> None:
+    """Only the sentinel survives, and accepting that invents a sample with no answer."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {"http_status": 200, "stream_frames": frames},
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+
+
+def test_recorded_unsupported_stream_reports_what_was_actually_requested() -> None:
+    """The report said `stream: False` on the very call that asked for a stream."""
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "unsupported_settings": ["stream", "seed"],
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(stream=True, seed=1234),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    reported = {item.setting: item.requested for item in outcome.unsupported}
+    assert reported["stream"] is True, "the request did ask for a stream"
+    assert reported["seed"] == 1234, "the seed the request carried must not be lost"
+
+
+def test_recorded_unsupported_complete_reports_what_was_actually_requested() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["seed"],
+            }
+        }
+    )
+    outcome = instance.complete(
+        sample_key=key(), request=request_(seed=99), prompt_hash=PROMPT_HASH
+    )
+    assert [item.requested for item in outcome.unsupported] == [99]
+
+
+@pytest.mark.parametrize(
+    ("raw", "terminated"),
+    [
+        (True, True),
+        (False, False),
+        (0, False),
+        (0.0, False),
+        ("false", False),
+        ("no", False),
+        (None, False),
+        (1, False),
+    ],
+)
+def test_only_a_real_true_means_a_capture_was_terminated(raw: object, terminated: bool) -> None:
+    """A value the fixture schema coerces to False must read the same way here."""
+    from stealthbench.adapters.zen import _was_terminated
+
+    assert _was_terminated(raw) is terminated
+
+
+def test_an_absent_terminated_field_means_the_capture_was_complete() -> None:
+    """The default is an ordinary complete capture, matching the fixture schema."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    assert "stream_terminated" not in instance._exchanges["ifeval::item-1"]
+    assert instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH).ok
