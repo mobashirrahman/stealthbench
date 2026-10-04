@@ -85,7 +85,10 @@ def map_finish_reason(reason: str | None) -> FinishStatus | None:
 
     An unrecognised reason becomes ``error`` rather than a success reason either.
     """
-    if reason is None:
+    if not isinstance(reason, str):
+        # Absent, or a shape this vocabulary does not define. Either way there is no
+        # reason to report, and calling `.lower()` on it would raise out of the adapter
+        # where the streaming path already refuses to guess.
         return None
     return _FINISH_REASONS.get(reason.lower(), "error")
 
@@ -364,13 +367,7 @@ class ZenAdapter(ProviderAdapter):
         self._exchanges: dict[str, Mapping[str, Any]] = dict(exchanges or {})
         self.extra_secrets = extra_secrets
         self.catalog_source = catalog_source
-        self._capabilities = Capabilities(
-            streaming=False,
-            tool_calls=False,
-            reasoning=False,
-            usage_reporting=False,
-            logprobs=False,
-        )
+        self._snapshot: CatalogSnapshot | None = None
 
     @classmethod
     def from_path(cls, path: Path, *, extra_secrets: frozenset[str] = frozenset()) -> ZenAdapter:
@@ -398,18 +395,38 @@ class ZenAdapter(ProviderAdapter):
             endpoint_id=bound if isinstance(bound, str) and bound.strip() else None,
         )
 
+    def _capabilities_for(self, endpoint_id: str) -> Capabilities | None:
+        """What the discovered catalog says about an alias, or ``None`` if it says nothing.
+
+        Substituting a placeholder here would let the adapter claim that a catalog does
+        not advertise streaming when it has never read one. With no evidence, no claim
+        is reported: an absent capability source is not a negative observation.
+        """
+        if self._snapshot is None:
+            self._snapshot = normalize_catalog(
+                self._catalog_payload if isinstance(self._catalog_payload, Mapping) else {},
+                source=self.catalog_source,
+                extra_secrets=self.extra_secrets,
+            )
+        entry = self._snapshot.get(endpoint_id)
+        return entry.capabilities if entry is not None else None
+
     def discover(self) -> CatalogSnapshot:
         """Snapshot whatever the recorded catalog response contained.
 
         Absent or malformed yields an empty snapshot. No alias is ever invented.
         """
+        if self._snapshot is not None:
+            return self._snapshot
         if self._catalog_payload is None:
-            return CatalogSnapshot(source=self.catalog_source, raw={})
-        return normalize_catalog(
+            self._snapshot = CatalogSnapshot(source=self.catalog_source, raw={})
+            return self._snapshot
+        self._snapshot = normalize_catalog(
             self._catalog_payload,
             source=self.catalog_source,
             extra_secrets=self.extra_secrets,
         )
+        return self._snapshot
 
     def _record_for(self, sample_key: SampleKey) -> Mapping[str, Any] | None:
         """The recorded exchange for a sample key, or ``None`` when there is none.
@@ -484,7 +501,7 @@ class ZenAdapter(ProviderAdapter):
         del prompt_hash
         attempt = attempt_id or f"{sample_key.task_id}-r{sample_key.repeat_id}-a{attempt_number}"
         unsupported: tuple[UnsupportedSetting, ...] = check_requested_settings(
-            request, capabilities or self._capabilities
+            request, capabilities or self._capabilities_for(sample_key.endpoint_id)
         )
 
         record = self._record_for(sample_key)
@@ -596,7 +613,9 @@ class ZenAdapter(ProviderAdapter):
 
         attempt = attempt_id or f"{sample_key.task_id}-r{sample_key.repeat_id}-a{attempt_number}"
         unsupported: tuple[UnsupportedSetting, ...] = check_requested_settings(
-            request, capabilities or self._capabilities, stream=True
+            request,
+            capabilities or self._capabilities_for(sample_key.endpoint_id),
+            stream=True,
         )
         record = self._record_for(sample_key)
         recorded_settings = _recorded_unsupported(record, request, self.extra_secrets)
@@ -635,9 +654,7 @@ class ZenAdapter(ProviderAdapter):
             body = record.get("body") or record.get("error_body")
             return AdapterResult(
                 failure=safe_failure(
-                    FailureKind(recorded_kind)
-                    if isinstance(recorded_kind, str)
-                    else FailureKind.SERVER_ERROR,
+                    _mapped_failure_kind(recorded_kind) or FailureKind.SERVER_ERROR,
                     _detail_of(record),
                     http_status=real_status,
                     retry_after_seconds=_retry_after(record),

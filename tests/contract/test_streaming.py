@@ -1290,13 +1290,22 @@ def test_a_chunk_with_no_delta_object_is_still_classified() -> None:
     assert event.finish_reason == "stop"
 
 
-def test_a_usage_only_chunk_with_a_choice_is_still_reported_as_usage() -> None:
-    """Usage riding alongside a choice is a measurement, not an answer."""
+def test_a_usage_only_chunk_with_a_contentless_choice_is_classified_as_usage() -> None:
+    """With no delta and no reason, a usage report is the only thing the record carries."""
+    payload = {"choices": [{"finish_reason": None}], "usage": {"output_tokens": 6}}
+    event = classify_chunk(payload)
+    assert event.kind is StreamEventKind.USAGE
+    assert event.usage.output_tokens == 6
+
+
+def test_a_chunk_carrying_content_and_usage_classifies_as_content() -> None:
+    """The control: content wins the classification, and the usage rides along."""
     payload = {
         "choices": [{"delta": {"content": "x"}, "finish_reason": None}],
         "usage": {"output_tokens": 5},
     }
     event = classify_chunk(payload)
+    assert event.kind is StreamEventKind.DELTA
     assert event.content_delta == "x"
     assert event.usage.output_tokens == 5
 

@@ -469,18 +469,6 @@ def test_a_catalog_missing_capabilities_claims_nothing() -> None:
 
 
 def test_duplicate_catalog_aliases_are_rejected() -> None:
-    snapshot = (
-        CatalogSnapshot(
-            source="test",
-            entries=(
-                _entry("dup"),
-                _entry("dup"),
-            ),
-        )
-        if False
-        else None
-    )
-    del snapshot
     with pytest.raises(ValidationError, match="duplicate catalog aliases"):
         CatalogSnapshot.model_validate(
             {
@@ -1591,3 +1579,28 @@ def test_an_absent_sentinel_field_reads_as_a_complete_capture() -> None:
     assert read_terminated() is True
     assert read_terminated(True) is True
     assert read_terminated(False) is False
+
+
+@pytest.mark.parametrize("flag", [1, 1.0])
+def test_a_numeric_one_reads_as_terminated(flag: float) -> None:
+    """The positive half of the numeric rule, so it is a rule and not a denial."""
+    from stealthbench.adapters.base import read_terminated
+
+    assert read_terminated(flag) is True
+
+
+@pytest.mark.parametrize("flag", [0, 0.0])
+def test_a_numeric_zero_reads_as_not_terminated(flag: float) -> None:
+    from stealthbench.adapters.base import read_terminated
+
+    assert read_terminated(flag) is False
+
+
+def test_a_boolean_failure_kind_reader_maps_a_non_string_to_nothing() -> None:
+    """Defence in depth on the shared reader, which both routes call."""
+    from stealthbench.adapters.base import _mapped_failure_kind
+
+    assert _mapped_failure_kind("rate_limit") is FailureKind.RATE_LIMIT
+    assert _mapped_failure_kind("not-a-kind") is None
+    assert _mapped_failure_kind(None) is None
+    assert _mapped_failure_kind(7) is None

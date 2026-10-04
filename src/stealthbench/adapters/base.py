@@ -551,7 +551,7 @@ class FixtureTransport(ProviderAdapter):
         if recorded.outcome == "error":
             assert recorded.failure_kind is not None
             failure = safe_failure(
-                FailureKind(recorded.failure_kind),
+                _mapped_failure_kind(recorded.failure_kind) or FailureKind.SERVER_ERROR,
                 recorded.failure_detail or "recorded failure",
                 http_status=recorded.http_status,
                 retry_after_seconds=recorded.retry_after_seconds,
@@ -634,7 +634,7 @@ class FixtureTransport(ProviderAdapter):
             assert recorded.failure_kind is not None
             return AdapterResult(
                 failure=safe_failure(
-                    FailureKind(recorded.failure_kind),
+                    _mapped_failure_kind(recorded.failure_kind) or FailureKind.SERVER_ERROR,
                     recorded.failure_detail or "recorded failure",
                     http_status=recorded.http_status,
                     retry_after_seconds=recorded.retry_after_seconds,
@@ -713,12 +713,32 @@ def read_terminated(value: Any = _ABSENT) -> bool:
         return True
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
-        return value != 0
+    # A number counts only when it is plainly the flag: 1 means terminated, 0 does
+    # not. A negative, fractional or non-finite value is not a statement about the
+    # stream, and reading it as one would invent a completion.
+    if isinstance(value, int) and value in (0, 1):
+        return value == 1
+    if isinstance(value, float) and value in (0.0, 1.0):
+        return value == 1.0
     if isinstance(value, str):
         # An allowlist: an unrecognised spelling is not evidence of completion.
         return value.strip().lower() in _TRUE_WORDS
     return False
+
+
+def _mapped_failure_kind(name: Any) -> FailureKind | None:
+    """A recorded failure kind, when it is one this vocabulary defines.
+
+    A capture may name a kind the project does not model. It is still a failure, so it
+    is reported as one rather than dropped; constructing ``FailureKind`` from it would
+    raise out of the adapter and lose the detail the capture recorded.
+    """
+    if not isinstance(name, str):
+        return None
+    try:
+        return FailureKind(name)
+    except ValueError:
+        return None
 
 
 def _recorded_measurements(

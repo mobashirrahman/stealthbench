@@ -1158,6 +1158,11 @@ def test_a_capture_with_no_usable_frames_is_refused(frames: list[object]) -> Non
     assert not outcome.ok
     assert outcome.result is None
     assert outcome.failure is not None
+    # Every refusal branch in this method satisfies the assertions above; the kind is
+    # what distinguishes "the frames were unusable" from a missing capture, a declined
+    # setting or a cut stream.
+    assert outcome.failure.kind is FailureKind.PROTOCOL, outcome.failure.detail
+    assert "no usable frames" in outcome.failure.detail
 
 
 def test_recorded_unsupported_stream_reports_what_was_actually_requested() -> None:
@@ -1857,3 +1862,154 @@ def test_a_detail_reader_given_a_non_mapping_returns_the_generic_detail() -> Non
 
     assert _detail_of("not-a-mapping") == "recorded failure"
     assert _detail_of(None) == "recorded failure"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the seventh G03 review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reason", [5, True, 1.5, [], {}, 0, -1, object()])
+def test_a_non_string_finish_reason_does_not_raise_out_of_the_adapter(
+    reason: object,
+) -> None:
+    """CRITICAL: `reason.lower()` on a non-string raised from complete().
+
+    The streamed path already refused to guess; the two routes disagreed on the same
+    capture, and one of them died.
+    """
+    payload = chat_payload(
+        choices=[{"message": {"role": "assistant", "content": "hi"}, "finish_reason": reason}]
+    )
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}})
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert completed.ok, f"{reason!r} must not raise"
+    assert completed.result is not None
+    assert completed.result.finish_status is None, f"{reason!r} is not a finish reason"
+
+
+def test_a_non_string_finish_reason_in_a_stream_reports_the_same_thing() -> None:
+    payload = json.dumps(
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": 5}]}, ensure_ascii=False
+    )
+    body = f"data: {payload}\n\n".encode() + b"data: [DONE]\n\n"
+    from stealthbench.adapters.streaming import parse_stream
+
+    streamed, _ = parse_stream([body], sample_key=key(), route="zen")
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": {"choices": [{"message": {"content": "hi"}, "finish_reason": 5}]},
+            }
+        }
+    )
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert streamed.ok and completed.ok
+    assert streamed.result is not None and completed.result is not None
+    assert streamed.result.finish_status == completed.result.finish_status is None
+
+
+def test_an_unknown_recorded_failure_kind_does_not_raise_on_the_streaming_path() -> None:
+    """CRITICAL: the streamed path constructed FailureKind from the capture directly."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "outcome": "error",
+                "failure_kind": "meteor_strike",
+                "error_message": "a kind this vocabulary does not define",
+                "stream_frames": [{"choices": [{"delta": {"content": "partial"}}]}],
+            }
+        }
+    )
+    streamed = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert streamed.failure is not None
+    assert completed.failure is not None
+    assert streamed.failure.kind is completed.failure.kind is FailureKind.SERVER_ERROR
+    assert "does not define" in streamed.failure.detail
+
+
+def test_a_stream_is_never_reported_as_unsupported_when_the_catalog_advertises_it() -> None:
+    """MAJOR: the adapter claimed a catalog it never read does not offer streaming."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a", "capabilities": {"streaming": True}}]},
+        endpoint_id="alias-a",
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        },
+    )
+    assert instance.discover().get("alias-a").capabilities.streaming is True
+    outcome = instance.stream(
+        sample_key=key(), request=request_(stream=True), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.ok
+    assert "stream" not in [item.setting for item in outcome.unsupported], (
+        "the discovered catalog advertises streaming"
+    )
+
+
+def test_streaming_is_reported_unsupported_when_the_discovered_catalog_omits_it() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}]},
+        endpoint_id="alias-a",
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        },
+    )
+    outcome = instance.stream(
+        sample_key=key(), request=request_(stream=True), prompt_hash=PROMPT_HASH
+    )
+    assert [item.setting for item in outcome.unsupported] == ["stream"]
+    assert outcome.unsupported[0].requested is True
+
+
+def test_nothing_is_claimed_about_a_catalog_that_was_never_recorded() -> None:
+    """No catalog evidence is not a negative observation."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(), request=request_(stream=True), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.ok
+    assert outcome.unsupported == (), "an absent catalog supports no claim either way"
+
+
+@pytest.mark.parametrize("status", [-1, 0.5, float("nan"), float("inf"), 2.5])
+def test_a_sentinel_flag_that_is_not_a_sane_number_is_not_completion(
+    status: float,
+) -> None:
+    """Defence in depth: only a real boolean or a documented spelling counts."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_terminated": status,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok, f"{status!r} is not a statement that the stream completed"
+
+
+def test_a_discovered_snapshot_is_cached_and_reused() -> None:
+    """Two calls must see one observation, not a freshly rebuilt one."""
+    instance = adapter(catalog_payload={"data": [{"id": "alias-a"}]})
+    first = instance.discover()
+    second = instance.discover()
+    assert first is second
+    assert first.digest() == second.digest()

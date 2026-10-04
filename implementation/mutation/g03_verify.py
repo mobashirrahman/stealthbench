@@ -85,7 +85,7 @@ MUTATIONS = (
         "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
-        "M5b",
+        "M9",
         "5b: the fixture adapter's effective settings skip redaction",
         "src/stealthbench/adapters/base.py",
         """                effective_settings=redact_mapping(
@@ -95,7 +95,7 @@ MUTATIONS = (
         "tests/contract/test_provider_contract.py",
     ),
     Mutation(
-        "M5c",
+        "M67",
         "5c: a fixture tool-call argument skips redaction",
         "src/stealthbench/adapters/base.py",
         """                    "tool_calls": redact_mapping(
@@ -106,7 +106,7 @@ MUTATIONS = (
         "tests/contract/test_provider_contract.py",
     ),
     Mutation(
-        "M5d",
+        "M63",
         "5d: Zen provider metadata skips redaction",
         "src/stealthbench/adapters/zen.py",
         "redacted_provider_metadata=redact_mapping(metadata, extra_secrets=self.extra_secrets)",
@@ -169,8 +169,8 @@ MUTATIONS = (
         "M13",
         "review-3 MAJOR: an absent finish reason is reported as a clean stop",
         "src/stealthbench/adapters/zen.py",
-        "    if reason is None:\n        return None",
-        '    if reason is None:\n        return "stop"',
+        "    if not isinstance(reason, str):\n",
+        "    if not isinstance(reason, str) and reason is not None:\n",
         "tests/contract",
     ),
     Mutation(
@@ -726,7 +726,72 @@ MUTATIONS = (
         "tests/contract",
     ),
     Mutation(
-        "M9",
+        "M68",
+        "review7-1: a non-string finish reason raises out of complete()",
+        "src/stealthbench/adapters/zen.py",
+        "    if not isinstance(reason, str):\n",
+        "    if reason is None:\n",
+        "tests/contract",
+    ),
+    Mutation(
+        "M69",
+        "review7-2: an unknown recorded failure kind raises out of stream()",
+        "src/stealthbench/adapters/zen.py",
+        ("                    _mapped_failure_kind(recorded_kind) or FailureKind.SERVER_ERROR,\n",),
+        ("                    FailureKind(recorded_kind)\n",),
+        "tests/contract",
+    ),
+    Mutation(
+        "M70",
+        "review7-3: an unmapped recorded failure kind raises out of the fixture route",
+        "src/stealthbench/adapters/base.py",
+        (
+            "    try:\n",
+            "        return FailureKind(name)\n",
+            "    except ValueError:\n",
+        ),
+        "    return FailureKind(name)\n",
+        "tests/contract",
+    ),
+    Mutation(
+        "M71",
+        "review7-2: an unmapped recorded failure kind raises out of the Zen stream path",
+        "src/stealthbench/adapters/zen.py",
+        (
+            "    try:\n",
+            "        return FailureKind(name)\n",
+            "    except ValueError:\n",
+        ),
+        "    return FailureKind(name)\n",
+        "tests/contract",
+    ),
+    Mutation(
+        "M74",
+        "review7-6: the discovered snapshot cache returns an empty catalog",
+        "src/stealthbench/adapters/zen.py",
+        (
+            "            capabilities or self._capabilities_for(sample_key.endpoint_id),\n",
+            "            stream=True,\n",
+        ),
+        ("            self._capabilities_for(sample_key.endpoint_id),\n",),
+        "tests/contract",
+    ),
+    Mutation(
+        "M72",
+        "review7: a nonsensical sentinel value is read as completion",
+        "src/stealthbench/adapters/base.py",
+        (
+            "    if isinstance(value, int) and value in (0, 1):\n",
+            "        return value == 1\n",
+        ),
+        (
+            "    if isinstance(value, (int, float)):\n",
+            "        return value != 0\n",
+        ),
+        "tests/contract",
+    ),
+    Mutation(
+        "M73",
         "new: the catalog is not read from the recorded GET /models response",
         "src/stealthbench/adapters/zen.py",
         '            catalog = _catalog_from_requests(raw.get("requests"))',
