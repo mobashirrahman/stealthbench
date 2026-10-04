@@ -31,6 +31,16 @@
     "stratified_14_categories": true,
     "transport_failed": 0
   },
+  "mmlu_pro_1024": {
+    "accuracy_content_only": 0.73,
+    "correct": 73,
+    "empty_content": 15,
+    "max_tokens": 1024,
+    "n": 100,
+    "note": "Same 100 items/prompts as the 0.36 run; only the output budget changed (64->1024). Reasoning traces complete and the answer letter lands in content.",
+    "same_selection": true,
+    "transport_failed": 0
+  },
   "model": "space-bunny-free",
   "raw_artifacts": "artifacts/live-suite-20261004/ (gitignored)",
   "seed": 20261004,
