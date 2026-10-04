@@ -33,10 +33,13 @@ from stealthbench.schemas.campaign import (
 )
 from stealthbench.schemas.manifest import PromptRef, prompt_hash
 from stealthbench.schemas.results import (
+    DeliveryStatus,
     EvaluationPayload,
+    GenerationResult,
     ModelRequest,
     SampleKey,
     TaskSpec,
+    Usage,
     task_id_for,
 )
 
@@ -544,3 +547,184 @@ def test_an_adapter_that_returns_neither_a_result_nor_a_failure_is_reported() ->
     report = run_campaign(**run_kwargs([task("i0")], adapter=Broken()))
     assert isinstance(report, RunReport)
     assert report.accepted_sample_count == 0
+
+
+def test_a_non_retryable_failure_is_not_retried() -> None:
+    """A 4xx will not fix itself, so the run must stop rather than spend tokens on it.
+
+    This fails against the pre-review runner: ``build_plan`` pre-generates
+    ``max_attempts`` attempts and the loop walked them, so an authentication
+    failure was dispatched again and the ledger charged another reservation.
+    """
+
+    class AlwaysAuthFails(ProviderAdapter):
+        route = "auth-fails"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def discover(self):  # type: ignore[no-untyped-def]
+            return fixture_adapter().discover()
+
+        def complete(self, **kwargs: object):  # type: ignore[no-untyped-def]
+            from stealthbench.adapters.base import FailureKind, TransportFailure
+
+            self.calls += 1
+            return AdapterResult(
+                failure=TransportFailure(kind=FailureKind.AUTHENTICATION, detail="401 bad key")
+            )
+
+    adapter = AlwaysAuthFails()
+    clock = FakeClock()
+    report = run_campaign(**run_kwargs([task("i0")], clock=clock, adapter=adapter))
+    assert adapter.calls == 1, "an authentication failure must not be retried"
+    assert clock.slept == [], "a non-retryable failure must not wait for a backoff"
+    assert len(report.failures) == 1
+    assert "401" in report.failures[0]
+
+
+def _accepted_with_usage(usage: Usage) -> ProviderAdapter:
+    """An adapter whose every delivery is accepted but reports the given usage."""
+
+    class FixedUsage(ProviderAdapter):
+        route = "fixed-usage"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def discover(self):  # type: ignore[no-untyped-def]
+            return fixture_adapter().discover()
+
+        def complete(self, **kwargs: object):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            sample = kwargs["sample_key"]
+            return AdapterResult(
+                result=GenerationResult(
+                    attempt_id=f"att-fixed-{self.calls}",
+                    sample_key=sample,  # type: ignore[arg-type]
+                    attempt_number=self.calls,
+                    delivery_status=DeliveryStatus.ACCEPTED,
+                    response="an answer",
+                    usage=usage,
+                )
+            )
+
+    return FixedUsage()
+
+
+def test_a_delivery_outside_the_token_caps_is_not_an_accepted_sample() -> None:
+    """The caps bind what comes back, not just what goes out.
+
+    Previously any ACCEPTED delivery was appended and counted; a run could exceed
+    its declared token limits and still report a full denominator.
+    """
+    adapter = _accepted_with_usage(
+        Usage(input_tokens=1_000_000, output_tokens=10, provider_reported=True)
+    )
+    tight = limits(max_input_tokens=100)
+    report = run_campaign(
+        **run_kwargs(
+            [task("i0")], adapter=adapter, limits=tight, ledger=Ledger(limits=tight, book=BOOK)
+        )
+    )
+    assert isinstance(report, RunReport)
+    assert report.accepted_sample_count == 0
+    assert adapter.calls == 1, "retrying the same request would violate the same cap"
+    assert any("exceed the cap" in failure for failure in report.failures)
+
+
+def test_an_unreported_usage_is_refused_when_a_missingness_threshold_is_declared() -> None:
+    """A threshold means unreported usage cannot be shown inside the caps."""
+    adapter = _accepted_with_usage(Usage(provider_reported=False))
+    strict = limits(missingness_threshold=0.1)
+    report = run_campaign(
+        **run_kwargs(
+            [task("i0")], adapter=adapter, limits=strict, ledger=Ledger(limits=strict, book=BOOK)
+        )
+    )
+    assert isinstance(report, RunReport)
+    assert report.accepted_sample_count == 0
+    assert any("missingness threshold" in failure for failure in report.failures)
+
+
+def test_a_dry_run_reports_a_budget_the_plan_cannot_hold() -> None:
+    """The tight budget refuses a real run, so the dry run must say so first."""
+    tasks = [task("i0")]
+    tight = limits(max_total_cost_usd=0.0001)
+    real = run_campaign(**run_kwargs(tasks, limits=tight, ledger=Ledger(limits=tight, book=BOOK)))
+    assert isinstance(real, RunReport)
+    assert real.failures, "the real run must refuse the tight budget"
+
+    dry = run_campaign(
+        **run_kwargs(tasks, limits=tight, ledger=Ledger(limits=tight, book=BOOK), dry_run=True)
+    )
+    assert isinstance(dry, DryRunReport)
+    assert dry.blockers, "a dry run that reports no blockers claims the budget holds"
+    assert any("cap" in blocker for blocker in dry.blockers)
+
+
+def test_a_dry_run_reports_bounds_it_cannot_compute() -> None:
+    """Unknown prices refuse capped execution, so the dry run must name them."""
+    from stealthbench.schemas.campaign import PricingSnapshot
+
+    partial = PriceBook(PricingSnapshot(input_per_mtok=3.0, snapshot_id="partial"))
+    tasks = [task("i0")]
+    dry = run_campaign(
+        **run_kwargs(tasks, ledger=Ledger(limits=limits(), book=partial), dry_run=True)
+    )
+    assert isinstance(dry, DryRunReport)
+    assert dry.blockers, "a dry run that reports no blockers claims pricing is known"
+
+
+def test_a_dry_run_reports_a_plan_larger_than_the_request_cap() -> None:
+    """A plan the request cap cannot fit must be visible before anything dispatches."""
+    tasks = [task(f"i{n}") for n in range(3)]
+    small = limits(max_requests=2, max_concurrency=2)
+    dry = run_campaign(
+        **run_kwargs(tasks, limits=small, ledger=Ledger(limits=small, book=BOOK), dry_run=True)
+    )
+    assert isinstance(dry, DryRunReport)
+    assert any("request cap" in blocker for blocker in dry.blockers)
+
+
+def test_a_dry_run_reports_a_sample_with_no_request() -> None:
+    """A plan item the task map cannot serve must be visible before dispatch."""
+    tasks = [task("i0")]
+    kwargs = run_kwargs(tasks, dry_run=True)
+    kwargs["tasks"] = {}
+    report = run_campaign(**kwargs)
+    assert isinstance(report, DryRunReport)
+    assert any("no request for" in blocker for blocker in report.blockers)
+
+
+def test_a_dry_run_reports_a_sample_with_no_input_bound() -> None:
+    """Without an input bound the real loop would refuse; the dry run says so first."""
+    tasks = [task("i0")]
+    kwargs = run_kwargs(tasks, dry_run=True)
+    kwargs["prompt_tokens"] = {}
+    report = run_campaign(**kwargs)
+    assert isinstance(report, DryRunReport)
+    assert any("no input token bound" in blocker for blocker in report.blockers)
+
+
+def test_a_dry_run_without_a_cost_cap_reports_no_budget_blocker() -> None:
+    """The budget check only exists when a cap was declared."""
+    uncapped = Limits.model_validate(
+        {
+            "max_requests": 20,
+            "max_concurrency": 2,
+            "max_input_tokens": 1_000_000,
+            "max_output_tokens": 100_000,
+            "max_total_cost_usd": None,
+            "max_wall_seconds": 600.0,
+            "require_cost_bounds": False,
+        }
+    )
+    tasks = [task("i0")]
+    report = run_campaign(
+        **run_kwargs(
+            tasks, limits=uncapped, ledger=Ledger(limits=uncapped, book=BOOK), dry_run=True
+        )
+    )
+    assert isinstance(report, DryRunReport)
+    assert report.blockers == ()

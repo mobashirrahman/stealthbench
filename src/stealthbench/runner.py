@@ -30,8 +30,8 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from stealthbench.adapters.base import AdapterResult, ProviderAdapter
-from stealthbench.costs import BudgetExceeded, CostBoundUnavailable, Ledger
-from stealthbench.scheduler import AttemptPlan, RunPlan
+from stealthbench.costs import BudgetExceeded, CostBoundUnavailable, Ledger, estimate_upper_bound
+from stealthbench.scheduler import AttemptPlan, RunPlan, should_retry
 from stealthbench.schemas.campaign import Authorization, Capabilities, Limits
 from stealthbench.schemas.results import (
     GenerationResult,
@@ -287,6 +287,56 @@ def resolve_mode(
     return tuple(missing)
 
 
+def _validate_plan(
+    *,
+    plan: RunPlan,
+    tasks: Mapping[tuple[str, str], ModelRequest],
+    prompt_tokens: Mapping[tuple[str, str], int | None],
+    ledger: Ledger,
+    limits: Limits,
+) -> list[str]:
+    """What a dry run can prove without generating anything.
+
+    Every check here mirrors a refusal the real loop would hit: a missing request,
+    a missing input bound, an uncomputable cost bound, a worst case the cap cannot
+    hold, or a plan larger than the request cap. The ledger itself is untouched --
+    validation reserves nothing and dispatches nothing.
+    """
+    blockers: list[str] = []
+    worst_total = Decimal(0)
+    for item in plan.eligible:
+        pair = (item.sample_key.endpoint_id, item.sample_key.task_id)
+        request = tasks.get(pair)
+        if request is None:
+            blockers.append(
+                f"no request for {item.sample_key.task_id} on {item.sample_key.endpoint_id}"
+            )
+            continue
+        prompt = prompt_tokens.get(pair)
+        if prompt is None:
+            blockers.append(f"no input token bound for {item.sample_key.task_id}")
+            continue
+        try:
+            worst_total += estimate_upper_bound(
+                input_tokens=prompt,
+                max_output_tokens=request.max_output_tokens,
+                book=ledger.book,
+            )
+        except CostBoundUnavailable as exc:
+            blockers.append(f"{item.sample_key.task_id}: {exc.reason}")
+    if limits.max_total_cost_usd is not None:
+        cap = Decimal(str(limits.max_total_cost_usd))
+        if ledger.committed + worst_total > cap:
+            blockers.append(
+                f"worst-case cost {worst_total} exceeds the remaining cap {cap - ledger.committed}"
+            )
+    if plan.dispatches + ledger.requests > limits.max_requests:
+        blockers.append(
+            f"planned dispatches {plan.dispatches} exceed the request cap {limits.max_requests}"
+        )
+    return blockers
+
+
 def run_campaign(
     *,
     campaign_id: str,
@@ -337,6 +387,9 @@ def run_campaign(
         )
 
     if dry_run:
+        blockers = _validate_plan(
+            plan=plan, tasks=tasks, prompt_tokens=prompt_tokens, ledger=ledger, limits=limits
+        )
         return DryRunReport(
             campaign_id=campaign_id,
             mode=mode,
@@ -351,6 +404,7 @@ def run_campaign(
                 "tasks",
                 "credentials" if credentials_configured else "offline",
             ),
+            blockers=tuple(blockers),
         )
 
     report = RunReport(campaign_id=campaign_id, mode=mode, plan=plan)
@@ -407,6 +461,16 @@ def run_campaign(
                 )
             )
             if result is not None:
+                usage_decision = ledger.check_usage(result.usage)
+                if not usage_decision.allowed:
+                    # The request already went out, so its reservation stands settled;
+                    # but a delivery outside the declared token caps is not a usable
+                    # sample, and retrying the same request would violate the same cap.
+                    report.failures = (
+                        *report.failures,
+                        f"{item.sample_key.task_id}: {usage_decision.reason}",
+                    )
+                    break
                 report.results.append(result)
                 if result.is_accepted_sample:
                     # The sample is answered; its remaining planned attempts are not
@@ -416,7 +480,17 @@ def run_campaign(
                 continue
             failure = _failure_of(outcome)
             if failure is not None:
-                report.failures = (*report.failures, failure.detail)
+                decision = should_retry(
+                    failure_kind=getattr(failure, "kind", None),
+                    attempt_number=attempt.attempt_number,
+                    policy=plan.policy,
+                )
+                report.failures = (*report.failures, f"{failure.detail} ({decision.reason})")
+                if not decision.retry:
+                    # A failure that cannot fix itself ends this sample's attempts. Walking
+                    # the rest of the pre-generated plan would spend another reservation
+                    # on a request the contract says must not be retried.
+                    break
                 continue
             # The adapter returned neither a result nor a failure. Say so rather than
             # counting the attempt as a success, and rather than letting an attribute

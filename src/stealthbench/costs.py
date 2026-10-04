@@ -255,6 +255,7 @@ class Settlement:
     price_snapshot_id: str | None
     released: Decimal
     note: str | None = None
+    settled_price_snapshot_id: str | None = None
 
     @property
     def settled(self) -> bool:
@@ -268,6 +269,7 @@ class Settlement:
             "released": str(self.released),
             "reservation_id": self.reservation_id,
             "settled": self.settled,
+            "settled_price_snapshot_id": self.settled_price_snapshot_id,
             "usage": self.usage.model_dump(mode="json"),
         }
 
@@ -328,6 +330,7 @@ class LedgerState:
                     price_snapshot_id=v["price_snapshot_id"],
                     released=Decimal(v["released"]),
                     note=v.get("note"),
+                    settled_price_snapshot_id=v.get("settled_price_snapshot_id"),
                 )
                 for k, v in raw.get("settlements", {}).items()
             },
@@ -410,27 +413,28 @@ class Ledger:
     ) -> Reservation:
         """Hold the worst case for one dispatch, or refuse.
 
-        Refusal happens when the bound cannot be computed, when a cap would be
-        exceeded, or when no input bound exists. Each is a different reason and the
-        caller is told which.
+        The worst case is held whenever it can be computed, whether or not bounds
+        are required: a computable bound the ledger does not hold is a hole in the
+        cap accounting. Refusal happens when the bound cannot be computed and bounds
+        are required, when a cap would be exceeded, or when no input bound exists.
+        Each is a different reason and the caller is told which.
         """
-        if self.limits.require_cost_bounds and self.limits.max_total_cost_usd is not None:
-            try:
-                amount = estimate_upper_bound(
-                    input_tokens=input_tokens,
-                    max_output_tokens=max_output_tokens,
-                    book=self.book,
-                )
-            except CostBoundUnavailable as exc:
+        try:
+            amount = estimate_upper_bound(
+                input_tokens=input_tokens,
+                max_output_tokens=max_output_tokens,
+                book=self.book,
+            )
+        except CostBoundUnavailable as exc:
+            if self.limits.require_cost_bounds and self.limits.max_total_cost_usd is not None:
                 raise CostBoundUnavailable(
                     f"cannot reserve for {sample_key.task_id}: {exc.reason}"
                 ) from exc
-        else:
             amount = Decimal(0)
             if input_tokens is None:
                 raise CostBoundUnavailable(
                     f"cannot reserve for {sample_key.task_id}: input token count is unknown"
-                )
+                ) from exc
 
         self._counter += 1
         reservation_id = next(self._sequence, f"res-{self._counter:06d}")
@@ -476,15 +480,21 @@ class Ledger:
         A report with no counts leaves the billed amount unknown and the whole
         reservation spent: the request went out, so the money may have been spent even
         though nobody said how much.
+
+        The reservation's snapshot stays the bound. The snapshot actually used to bill
+        is recorded separately; when the two differ, or when the billed amount exceeds
+        the reserved bound, the settlement note says so instead of silently absorbing
+        the change.
         """
         reservation = self.state.reservations.pop(reservation_id, None)
         if reservation is None:
             raise KeyError(f"no open reservation {reservation_id!r}")
 
+        settled_snapshot_id = price_snapshot_id or self.book.snapshot.snapshot_id
         billed = self.book.cost_of(usage) if usage.provider_reported else None
-        note: str | None = None
+        notes: list[str] = []
         if not usage.provider_reported:
-            note = "the endpoint reported no usage; the reservation is recorded as spent"
+            notes.append("the endpoint reported no usage; the reservation is recorded as spent")
             self.state.spent += reservation.amount
         else:
             self.state.spent += billed or Decimal(0)
@@ -501,16 +511,48 @@ class Ledger:
                 setattr(self.state, counter, getattr(self.state, counter) + value)
         if not usage.provider_reported:
             self.state.usage_missing += 1
+        if (
+            reservation.price_snapshot_id is not None
+            and settled_snapshot_id is not None
+            and settled_snapshot_id != reservation.price_snapshot_id
+        ):
+            if billed is not None:
+                notes.append(
+                    "price changed between reservation "
+                    f"({reservation.price_snapshot_id}) and settlement "
+                    f"({settled_snapshot_id}); billed {billed} against reserved "
+                    f"{reservation.amount} (difference {billed - reservation.amount})"
+                )
+            else:
+                notes.append(
+                    "price changed between reservation "
+                    f"({reservation.price_snapshot_id}) and settlement "
+                    f"({settled_snapshot_id}); the billed amount is unknown, so the "
+                    "reservation stands as spent"
+                )
+        if billed is not None and billed > reservation.amount:
+            notes.append(
+                f"actual cost {billed} exceeded reserved bound {reservation.amount} "
+                f"by {billed - reservation.amount}"
+            )
+        if self.limits.max_total_cost_usd is not None:
+            cap = Decimal(str(self.limits.max_total_cost_usd))
+            if self.state.spent > cap:
+                notes.append(
+                    f"spent {self.state.spent} exceeds declared cost cap {cap}; "
+                    "no further capped dispatches may be reserved"
+                )
         if self.limits.missingness_threshold is not None and not usage.provider_reported:
-            note = (note or "") + " the manifest declares a missingness threshold"
+            notes.append("the manifest declares a missingness threshold")
 
         settlement = Settlement(
             reservation_id=reservation_id,
             billed=billed,
             usage=usage,
-            price_snapshot_id=price_snapshot_id or reservation.price_snapshot_id,
+            price_snapshot_id=reservation.price_snapshot_id,
             released=reservation.amount,
-            note=note,
+            note="; ".join(notes) if notes else None,
+            settled_price_snapshot_id=settled_snapshot_id,
         )
         self.state.settlements[reservation_id] = settlement
         return settlement

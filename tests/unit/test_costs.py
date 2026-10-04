@@ -231,8 +231,60 @@ def test_a_price_change_after_reservation_does_not_silently_reattribute() -> Non
     book.book = dearer
     settlement = book.settle(reservation.reservation_id, usage=priced_usage(1_000_000, 0))
     assert settlement.price_snapshot_id == "snap-1", "the reservation's snapshot is what bound it"
+    assert settlement.settled_price_snapshot_id == "snap-2", (
+        "the billing snapshot is recorded beside it"
+    )
     assert settlement.billed == Decimal("300.0"), "the new price bills what it billed"
     assert book.state.spent == Decimal("300.0"), "and the spend follows the actual price"
+    note = settlement.note or ""
+    assert "price changed between reservation (snap-1) and settlement (snap-2)" in note
+    bound = reservation.amount
+    overrun = Decimal("300.0") - bound
+    assert f"difference {overrun}" in note, "a price move must show its amount, not just its ids"
+    assert f"actual cost 300.0 exceeded reserved bound {bound} by {overrun}" in note
+    assert "spent 300.0 exceeds declared cost cap 100.0" in note
+
+
+def test_a_price_change_with_an_unknown_bill_still_stands_on_the_reservation() -> None:
+    """An unknown bill after a price move is not silently absorbed either."""
+    book = ledger(max_total_cost_usd=100.0)
+    reservation = book.reserve(sample_key=key(), input_tokens=1_000_000, max_output_tokens=1000)
+    book.book = PriceBook(
+        PricingSnapshot(
+            input_per_mtok=300.0,
+            output_per_mtok=1500.0,
+            cached_input_per_mtok=30.0,
+            reasoning_per_mtok=1500.0,
+            snapshot_id="snap-2",
+        )
+    )
+    settlement = book.settle(reservation.reservation_id, usage=Usage(provider_reported=False))
+    assert settlement.billed is None
+    assert settlement.settled_price_snapshot_id == "snap-2"
+    assert book.state.spent == reservation.amount
+    note = settlement.note or ""
+    assert "price changed between reservation (snap-1) and settlement (snap-2)" in note
+    assert "the billed amount is unknown" in note
+
+
+def test_a_ledger_without_a_cost_cap_emits_no_cap_note() -> None:
+    """The cap branch is only meaningful when a cap was declared."""
+    uncapped_limits = Limits.model_validate(
+        {
+            "max_requests": 10,
+            "max_concurrency": 2,
+            "max_input_tokens": 100_000,
+            "max_output_tokens": 4_000,
+            "max_total_cost_usd": None,
+            "max_wall_seconds": 600.0,
+            "require_cost_bounds": False,
+        }
+    )
+    book = Ledger(limits=uncapped_limits, book=BOOK)
+    reservation = book.reserve(sample_key=key(), input_tokens=10, max_output_tokens=10)
+    assert reservation.amount == Decimal("0.00018"), "a computable bound is still held"
+    settlement = book.settle(reservation.reservation_id, usage=priced_usage(10, 1))
+    assert settlement.note is None, "with no cap declared there is no cap to breach"
 
 
 def test_cached_and_reasoning_tokens_are_priced_separately() -> None:
@@ -314,7 +366,23 @@ def test_a_ledger_with_no_cost_cap_still_refuses_an_unknown_input_bound() -> Non
     with pytest.raises(CostBoundUnavailable, match="unknown"):
         book.reserve(sample_key=key(), input_tokens=None, max_output_tokens=10)
     reservation = book.reserve(sample_key=key(), input_tokens=10, max_output_tokens=10)
-    assert reservation.amount == Decimal(0), "no cap means nothing is reserved"
+    assert reservation.amount == Decimal("0.00018"), (
+        "no cap means no ceiling, not a zero hold: the computable worst case is still recorded"
+    )
+
+
+def test_bounds_not_required_still_holds_a_computable_bound_against_a_cap() -> None:
+    """Not requiring bounds excuses only the uncomputable case, not the cap.
+
+    A reservation the ledger could have bounded but held at zero is a hole a burst
+    of concurrent requests walks through: each sees an empty commitment and all of
+    them go out.
+    """
+    book = Ledger(limits=limits(max_total_cost_usd=1.0, require_cost_bounds=False), book=BOOK)
+    first = book.reserve(sample_key=key("ifeval::a"), input_tokens=200_000, max_output_tokens=1000)
+    assert first.amount == Decimal("0.615"), "the computable worst case is held"
+    with pytest.raises(BudgetExceeded, match="max_total_cost_usd"):
+        book.reserve(sample_key=key("ifeval::b"), input_tokens=200_000, max_output_tokens=1000)
 
 
 def test_outstanding_reservations_count_against_the_request_cap() -> None:
@@ -399,9 +467,10 @@ def test_a_ledger_round_trips_through_its_serialized_state() -> None:
     a = book.reserve(sample_key=key("ifeval::a"), input_tokens=1_000_000, max_output_tokens=1000)
     book.settle(a.reservation_id, usage=priced_usage(1_000_000, 100))
     b = book.reserve(sample_key=key("ifeval::b"), input_tokens=1_000_000, max_output_tokens=1000)
-    restored = Ledger(
-        limits=limits(), book=BOOK, state=LedgerState.from_dict(book.snapshot().to_dict())
-    )
+    snapshot = book.snapshot().to_dict()
+    assert snapshot["settlements"][a.reservation_id]["settled_price_snapshot_id"] == "snap-1"
+    restored = Ledger(limits=limits(), book=BOOK, state=LedgerState.from_dict(snapshot))
+    assert restored.state.settlements[a.reservation_id].settled_price_snapshot_id == "snap-1"
     assert restored.state.spent == book.state.spent
     assert restored.reserved == book.reserved, "an outstanding reservation survives a restart"
     assert restored.outstanding == 1
@@ -484,3 +553,15 @@ def test_a_usage_decision_serialises_with_its_counts() -> None:
     assert payload["input_tokens"] == 10
     assert payload["output_tokens"] == 20
     json.dumps(payload)
+
+
+def test_bounds_not_required_tolerates_an_uncomputable_bound_it_could_not_hold() -> None:
+    """Not requiring bounds excuses only the case that cannot be computed.
+
+    With a missing price and no requirement, the reservation holds zero rather than
+    refusing; the request and token caps below still apply.
+    """
+    partial = PriceBook(PricingSnapshot(input_per_mtok=3.0, snapshot_id="partial"))
+    book = Ledger(limits=limits(require_cost_bounds=False), book=partial)
+    reservation = book.reserve(sample_key=key(), input_tokens=10, max_output_tokens=10)
+    assert reservation.amount == Decimal(0)
