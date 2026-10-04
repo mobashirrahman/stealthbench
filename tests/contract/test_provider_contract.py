@@ -1604,3 +1604,54 @@ def test_a_boolean_failure_kind_reader_maps_a_non_string_to_nothing() -> None:
     assert _mapped_failure_kind("not-a-kind") is None
     assert _mapped_failure_kind(None) is None
     assert _mapped_failure_kind(7) is None
+
+
+def test_fixture_discovery_keeps_the_first_duplicate_alias_like_the_zen_route() -> None:
+    """One payload must not produce two different catalog snapshots.
+
+    The Zen route keeps the first occurrence of a duplicated alias; the fixture
+    route used to raise out of discovery instead. A recorded catalog is the same
+    observation a live catalog is.
+    """
+    snapshot = FixtureTransport(
+        bundle(catalog={"models": [{"id": "dup"}, {"id": "dup"}]})
+    ).discover()
+    assert snapshot.aliases() == ("dup",)
+
+
+def test_a_boolean_http_status_is_not_read_as_a_status_on_the_fixture_route() -> None:
+    """Pydantic coerces True to 1; a transcript holding True holds no status code."""
+    with pytest.raises(ValidationError, match="not an HTTP status"):
+        FixtureTransport(
+            bundle(
+                exchanges=[
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "outcome": "error",
+                        "failure_kind": "rate_limit",
+                        "http_status": True,
+                    }
+                ]
+            )
+        )
+
+
+def test_a_boolean_retry_delay_is_not_read_as_a_delay_on_the_fixture_route() -> None:
+    """True is not a one-second wait, on either route."""
+    with pytest.raises(ValidationError, match="not an HTTP status or a retry delay"):
+        FixtureTransport(
+            bundle(
+                exchanges=[
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "outcome": "error",
+                        "failure_kind": "rate_limit",
+                        "retry_after_seconds": True,
+                    }
+                ]
+            )
+        )

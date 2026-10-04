@@ -414,6 +414,20 @@ class RecordedExchange(BaseModel):
     error_body: Mapping[str, Any] | None = None
     unsupported_settings: tuple[str, ...] = ()
 
+    @field_validator("http_status", "retry_after_seconds", mode="before")
+    @classmethod
+    def _numbers_are_not_booleans(cls, value: Any) -> Any:
+        """A boolean is not an HTTP status and not a retry delay.
+
+        Pydantic would otherwise coerce ``True`` to ``1`` and ``False`` to ``0``,
+        inventing a status code and a delay the transcript never contained. The Zen
+        route already reads both fields this strictly; the fixture route must agree,
+        or one transcript yields two different failures.
+        """
+        if isinstance(value, bool):
+            raise ValueError("a boolean is not an HTTP status or a retry delay")
+        return value
+
     @model_validator(mode="after")
     def _outcome_is_coherent(self) -> RecordedExchange:
         if self.outcome == "response" and self.failure_kind:
@@ -492,13 +506,30 @@ class FixtureTransport(ProviderAdapter):
             entry = _catalog_entry_from_raw(item, index, extra_secrets=self.extra_secrets)
             if entry is not None:
                 entries.append(entry)
-        return CatalogSnapshot(
-            source=self.bundle.catalog_source,
-            entries=tuple(entries),
-            # The snapshot-level raw record is stored and folded into the catalog
-            # digest, so it is redacted too, not just the per-entry copies.
-            raw=redact_mapping(_safe_mapping(raw), extra_secrets=self.extra_secrets),
-        )
+        try:
+            return CatalogSnapshot(
+                source=self.bundle.catalog_source,
+                entries=tuple(entries),
+                # The snapshot-level raw record is stored and folded into the catalog
+                # digest, so it is redacted too, not just the per-entry copies.
+                raw=redact_mapping(_safe_mapping(raw), extra_secrets=self.extra_secrets),
+            )
+        except ValidationError:
+            # Duplicate aliases in a recorded catalog are the same observation a live
+            # catalog produces on the Zen route: keep the first occurrence of each,
+            # so one payload never yields two different snapshots.
+            seen: set[str] = set()
+            unique: list[CatalogEntry] = []
+            for entry in entries:
+                if entry.alias in seen:
+                    continue
+                seen.add(entry.alias)
+                unique.append(entry)
+            return CatalogSnapshot(
+                source=self.bundle.catalog_source,
+                entries=tuple(unique),
+                raw=redact_mapping(_safe_mapping(raw), extra_secrets=self.extra_secrets),
+            )
 
     def capabilities(self) -> Capabilities:
         return self.bundle.capabilities
