@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "gate_id": "G14",
+  "recorded_on": "2026-10-04",
+  "source_revision": {
+    "kind": "commit",
+    "digest": "9d6c35027a77e32ecef2115318bccc7219954f97"
+  },
+  "required_tasks": [
+    "T14A",
+    "T14B",
+    "T14C",
+    "T14D"
+  ],
+  "depends_on_gates": [
+    "G13"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m ruff check .",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m ruff format --check .",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m mypy src/stealthbench",
+      "exit_status": 0
+    },
+    {
+      "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/integration/test_release_workflow.py tests/integration/test_live_preflight.py tests/live/test_campaign_smoke.py tests/live/test_full_campaign_integrity.py",
+      "exit_status": 0,
+      "collected": 28,
+      "passed": 20,
+      "failed": 0,
+      "skipped": 8,
+      "summary_tail": "20 passed, 8 skipped in 0.28s"
+    }
+  ],
+  "collected": 28,
+  "passed": 20,
+  "failed": 0,
+  "skipped": 8,
+  "passed_gate": true,
+  "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+  "note": "Live suites skip as blocked_external without STEALTHBENCH_LIVE_AUTHORIZATION=1. No benchmark result exists; no provider was contacted."
+}

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "status": "complete-pending-evidence-recording",
+  "status": "complete-provisional-review-pending",
   "instructions": "Follow IMPLEMENTATION_PLAN.md. Paths and commands are implementation targets, not evidence of existing code. Readiness requires passed prerequisite gates and done task dependencies. Split tasks exceeding three production modules.",
   "tasks": [
     {
@@ -407,9 +407,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G05",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G05/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -431,9 +432,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G05",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G05/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -455,9 +457,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G05",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G05/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -477,9 +480,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G06",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G06/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -501,9 +505,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G06",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G06/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -523,9 +528,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G07",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G07/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -547,9 +553,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G07",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G07/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -571,9 +578,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G07",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G07/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -595,9 +603,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G07",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G07/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -618,9 +627,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G08",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G08/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -643,9 +653,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G08",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G08/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -667,9 +678,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G09",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G09/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -693,9 +705,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G09",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G09/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -719,9 +732,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G09",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G09/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -742,9 +756,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G10",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G10/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -767,9 +782,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G10",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G10/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -792,9 +808,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G10",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G10/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -815,9 +832,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G11",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G11/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -840,9 +858,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G11",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G11/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -865,9 +884,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G11",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G11/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -887,9 +907,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G12",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G12/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -911,9 +932,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G12",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G12/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -935,9 +957,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G12",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G12/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -959,9 +982,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G13",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G13/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -985,9 +1009,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G13",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G13/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -1011,9 +1036,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G13",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G13/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -1033,9 +1059,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G14",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G14/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -1057,9 +1084,10 @@
       "execution_mode": "offline",
       "evidence": {
         "gate": "G14",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G14/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -1081,9 +1109,10 @@
       "execution_mode": "authorized_live",
       "evidence": {
         "gate": "G14",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G14/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     },
     {
@@ -1105,9 +1134,10 @@
       "execution_mode": "authorized_live",
       "evidence": {
         "gate": "G14",
-        "record": "working-tree (evidence pending gate recording)",
-        "review": "pass (subagent implementation + regression)",
-        "note": "Implemented in working tree; gate evidence JSON to be recorded per AGENT_TASK_TEMPLATE."
+        "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+        "record": "implementation/evidence/G14/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+        "review": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+        "note": "Subagent implementation; gate suites green."
       }
     }
   ],
@@ -1469,9 +1499,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G05/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/contract/test_dataset_manifest.py tests/contract/test_ifeval_oracle.py tests/integration/test_vertical_workflow.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1488,9 +1536,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G06/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/contract/test_mmlu_pro_oracle.py tests/contract/test_math500_oracle.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1509,9 +1575,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G07/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/sandbox/test_resource_limits.py tests/sandbox/test_isolation.py tests/contract/test_livecodebench_oracle.py tests/contract/test_evalplus_oracle.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1529,9 +1613,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G08/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/contract/test_bfcl_oracle.py tests/contract/test_ruler_oracle.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1551,9 +1653,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G09/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/unit/test_score_oracles.py tests/unit/test_statistics.py tests/unit/test_performance.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1572,9 +1692,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G10/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/sandbox/test_agent_runner.py tests/contract/test_swebench_oracle.py tests/contract/test_terminalbench_oracle.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1593,9 +1731,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G11/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/unit/test_probe_manifest.py tests/unit/test_fingerprint_validity.py tests/unit/test_similarity.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1613,9 +1769,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G12/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/unit/test_attribution_splits.py tests/unit/test_identity_evidence.py tests/unit/test_drift.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1635,9 +1809,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G13/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/integration/test_static_report.py tests/integration/test_report_exports.py tests/integration/test_canary_schedule.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     },
@@ -1656,9 +1848,27 @@
       "specification": "IMPLEMENTATION_PLAN.md",
       "evidence": [
         {
-          "record": "working-tree (gate.json pending)",
-          "review_decision": "PASS (implementation complete, regression green)",
-          "note": "Code + tests land in working tree; formal gate.json recording is next."
+          "source_revision": "9d6c35027a77e32ecef2115318bccc7219954f97",
+          "record": "implementation/evidence/G14/9d6c35027a77e32ecef2115318bccc7219954f97/gate.json",
+          "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+          "commands": [
+            {
+              "command": "python3 -m ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "python3 -m mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/integration/test_release_workflow.py tests/integration/test_live_preflight.py tests/live/test_campaign_smoke.py tests/live/test_full_campaign_integrity.py",
+              "exit_status": 0
+            }
+          ]
         }
       ]
     }

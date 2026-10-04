@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "gate_id": "G06",
+  "recorded_on": "2026-10-04",
+  "source_revision": {
+    "kind": "commit",
+    "digest": "9d6c35027a77e32ecef2115318bccc7219954f97"
+  },
+  "required_tasks": [
+    "T06A",
+    "T06B"
+  ],
+  "depends_on_gates": [
+    "G05"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m ruff check .",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m ruff format --check .",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m mypy src/stealthbench",
+      "exit_status": 0
+    },
+    {
+      "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/contract/test_mmlu_pro_oracle.py tests/contract/test_math500_oracle.py",
+      "exit_status": 0,
+      "collected": 74,
+      "passed": 74,
+      "failed": 0,
+      "skipped": 0,
+      "summary_tail": "74 passed in 0.38s"
+    }
+  ],
+  "collected": 74,
+  "passed": 74,
+  "failed": 0,
+  "skipped": 0,
+  "passed_gate": true,
+  "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+  "note": "Live suites skip as blocked_external without STEALTHBENCH_LIVE_AUTHORIZATION=1. No benchmark result exists; no provider was contacted."
+}
