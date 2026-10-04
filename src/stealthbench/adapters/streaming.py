@@ -220,10 +220,9 @@ class SSEParser:
         caller decide whether it was a complete payload, rather than the parser
         silently inventing or discarding content.
         """
-        if self._pending_cr:
-            # The stream ended on a bare CR, which is itself a line terminator.
-            self._buffer += "\n"
-            self._pending_cr = False
+        # The held-back CR needs no special case here: normalising any remaining CR to a
+        # newline below already makes it the terminator it was on the wire.
+        self._pending_cr = False
         remainder = self._buffer.replace("\r\n", "\n").replace("\r", "\n").strip(" \t\n")
         self._buffer = ""
         if not remainder:
@@ -451,9 +450,9 @@ def assemble(
             default=None,
         )
         if last_delta is not None:
+            # Content implies at least one contributing event, so the fallback below
+            # the old `elif result.content` was unreachable.
             result.first_answer_seconds = offset(last_delta)
-        elif result.content:
-            result.first_answer_seconds = result.first_content_seconds
     return result
 
 

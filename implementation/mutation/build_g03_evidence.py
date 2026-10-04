@@ -138,6 +138,26 @@ def main() -> int:
     cli_run = run(
         [str(ROOT / ".venv" / "bin" / "stealthbench"), "run", "configs/offline-demo.json"]
     )
+    # Branch coverage of the adapter layer, measured rather than asserted: it is the
+    # objective answer to "which path has no test", which six review rounds each
+    # answered one defect at a time.
+    coverage = run(
+        [
+            PY,
+            "-m",
+            "coverage",
+            "run",
+            "--branch",
+            "--source=src/stealthbench/adapters",
+            "-m",
+            "pytest",
+            "--strict-markers",
+            "-q",
+            "tests/unit",
+            "tests/contract",
+        ]
+    )
+    coverage_report = run([PY, "-m", "coverage", "report", "--include=*/adapters/*"])
 
     mutations, undetected = mutation_results()
     revision_proc = subprocess.run(
@@ -176,7 +196,18 @@ def main() -> int:
             "tests/fixtures/zen/chat.completions.truncated.sse",
             "tests/fixtures/zen/chat.completions.server_error.sse",
         ],
-        "commands": [lint, fmt, types, unit_contract, integ_replay, full, cli_validate, cli_run],
+        "commands": [
+            lint,
+            fmt,
+            types,
+            unit_contract,
+            integ_replay,
+            full,
+            cli_validate,
+            cli_run,
+            coverage,
+            coverage_report,
+        ],
         "exit_statuses": {
             "lint": lint["exit_status"],
             "format": fmt["exit_status"],
@@ -185,6 +216,7 @@ def main() -> int:
             "integration_replay": integ_replay["exit_status"],
             "full_offline_collection": full["exit_status"],
             "cli_validate": cli_validate["exit_status"],
+            "adapter_branch_coverage": coverage_report["exit_status"],
             "cli_run": cli_run["exit_status"],
         },
         "counted_suites": [

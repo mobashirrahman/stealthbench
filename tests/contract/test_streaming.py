@@ -1201,3 +1201,109 @@ def test_a_usage_only_capture_is_still_accepted() -> None:
     assert outcome.ok
     assert outcome.result is not None
     assert outcome.result.usage.output_tokens == 1
+
+
+# ---------------------------------------------------------------------------
+# Coverage of paths that no earlier test exercised
+# ---------------------------------------------------------------------------
+
+
+def test_a_corrupt_byte_in_the_middle_of_a_buffer_keeps_the_rest() -> None:
+    """The branch that emits the valid text before a corrupt byte."""
+    pieces = list(decode_stream_bytes([b"before \xff after"]))
+    assert "".join(pieces) == "before \ufffd after", pieces
+    assert pieces[0] == "before ", "the valid prefix is emitted on its own"
+
+
+def test_a_stream_ending_on_a_bare_cr_flushes_its_last_record() -> None:
+    """A held-back CR is itself a line terminator, so flush() must retire it."""
+    body = b'data: {"choices":[{"delta":{"content":"TAIL"}}]}\r\n\r\ndata: [DONE]\r\n\r'
+    outcome, _ = parse_stream([body], sample_key=key(), route="zen")
+    assert outcome.result is not None
+    assert outcome.result.response == "TAIL"
+
+
+def test_a_record_with_no_blank_line_terminator_is_flushed() -> None:
+    """A cut mid-record still yields whatever the record actually contained."""
+    body = b'data: {"choices":[{"delta":{"content":"CUT"}}]}'
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.content == "CUT"
+    assert not assembly.saw_done
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.INTERRUPTED
+
+
+def test_a_stream_parsed_with_no_sample_key_is_a_protocol_failure() -> None:
+    """Without a sample key there is nothing to attach a result to."""
+    body = (
+        b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    )
+    outcome, assembly = parse_stream([body], route="zen")
+    assert not outcome.ok
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
+    assert "sample key" in outcome.failure.detail
+    assert assembly.content == "x", "what arrived is still assembled"
+
+
+def test_content_after_the_sentinel_is_discarded_even_in_a_later_read() -> None:
+    """The parser's seen-done guard: a second read cannot revive a finished stream."""
+    done = b"data: [DONE]\n\n"
+    outcome, assembly = parse_stream(
+        [done, b'data: {"choices":[{"delta":{"content":"after"}}]}\n\n'], sample_key=key()
+    )
+    assert assembly.content == ""
+    assert assembly.saw_done
+    assert not outcome.ok, "nothing but the sentinel is not an answer"
+
+
+def test_a_content_parts_delta_of_only_non_text_parts_is_empty() -> None:
+    payload = json.dumps({"choices": [{"delta": {"content": [{"type": "image"}]}}]})
+    body = f"data: {payload}\n\n".encode() + b"data: [DONE]\n\n"
+    outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.content == ""
+    # No content and no usage, so this is refused rather than accepted empty.
+    assert outcome.failure is not None
+
+
+def test_a_terminal_record_with_neither_delta_nor_reason_nor_usage_is_not_a_finish() -> None:
+    payload = json.dumps({"choices": [{"delta": {}, "finish_reason": None}]})
+    _outcome, assembly = parse_stream(
+        [f"data: {payload}\n\n".encode() + b"data: [DONE]\n\n"], sample_key=key()
+    )
+    assert assembly.finish_reason is None
+
+
+def test_a_content_parts_delta_ignores_a_part_that_is_not_a_mapping() -> None:
+    parts = ["a string, not a part", {"text": "kept"}, {"no_text_key": 1}]
+    payload = json.dumps({"choices": [{"delta": {"content": parts}}]})
+    body = f"data: {payload}\n\n".encode() + b"data: [DONE]\n\n"
+    _outcome, assembly = parse_stream([body], sample_key=key(), route="zen")
+    assert assembly.content == "kept"
+
+
+def test_a_chunk_with_no_delta_object_is_still_classified() -> None:
+    """A choice with neither `delta` nor `content` must not raise."""
+    payload = json.dumps({"choices": [{"finish_reason": "stop"}]})
+    event = classify_chunk(json.loads(payload))
+    assert event.kind is StreamEventKind.FINISH
+    assert event.finish_reason == "stop"
+
+
+def test_a_usage_only_chunk_with_a_choice_is_still_reported_as_usage() -> None:
+    """Usage riding alongside a choice is a measurement, not an answer."""
+    payload = {
+        "choices": [{"delta": {"content": "x"}, "finish_reason": None}],
+        "usage": {"output_tokens": 5},
+    }
+    event = classify_chunk(payload)
+    assert event.content_delta == "x"
+    assert event.usage.output_tokens == 5
+
+
+def test_a_chunk_with_choices_and_usage_but_no_delta_reports_the_usage() -> None:
+    """Usage alongside a contentless choice is a measurement, not an unknown record."""
+    payload = {"choices": [{"finish_reason": None}], "usage": {"output_tokens": 6}}
+    event = classify_chunk(payload)
+    assert event.kind is StreamEventKind.USAGE
+    assert event.usage.output_tokens == 6

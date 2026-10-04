@@ -1605,3 +1605,255 @@ def test_the_no_frames_refusal_keeps_the_reported_unsupported_settings() -> None
     assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
     assert [item.setting for item in outcome.unsupported] == ["seed"]
     assert outcome.unsupported[0].requested == 3
+
+
+# ---------------------------------------------------------------------------
+# Coverage of extraction and lookup paths no earlier test exercised
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({"choices": [{"message": "not-a-mapping"}]}, "no message object"),
+        ({"choices": [{"message": {"content": 7}}]}, "non-string content"),
+        ({"choices": [{"message": {"content": [{"type": "image"}]}}]}, "no text parts"),
+        ({"choices": [{"message": {"content": None}}]}, "null content"),
+    ],
+    ids=["no-message", "number-content", "no-text-parts", "null-content"],
+)
+def test_a_response_with_no_usable_text_is_refused_rather_than_accepted_empty(
+    payload: dict[str, object], reason: str
+) -> None:
+    """An answer that cannot be read is not an empty answer."""
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}})
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok, reason
+    assert outcome.result is None, reason
+    assert outcome.failure is not None
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({"choices": "not-a-list"}, "choices not a list"),
+        ({"choices": []}, "no choices"),
+        ({"choices": ["not-a-mapping"]}, "choice not a mapping"),
+        ({"choices": [{"message": {"role": "assistant"}}]}, "no tool_calls key"),
+        ({"choices": [{"message": {"tool_calls": "nope"}}]}, "tool_calls not a list"),
+    ],
+)
+def test_tool_call_extraction_returns_nothing_rather_than_guessing(
+    payload: dict[str, object], reason: str
+) -> None:
+    from stealthbench.adapters.zen import extract_tool_calls
+
+    assert extract_tool_calls(payload) == (), reason
+
+
+def test_a_choice_that_is_not_a_mapping_is_a_protocol_error_not_a_stop() -> None:
+    from stealthbench.adapters.zen import finish_reason_of
+
+    assert finish_reason_of({"choices": ["not-a-mapping"]}) == "error"
+    assert finish_reason_of({}) == "error"
+
+
+def test_a_failure_kind_this_vocabulary_does_not_define_maps_to_a_server_error() -> None:
+    """An unknown recorded kind is still reported, never silently dropped."""
+    from stealthbench.adapters.zen import _mapped_failure_kind
+
+    assert _mapped_failure_kind("rate_limit") is FailureKind.RATE_LIMIT
+    assert _mapped_failure_kind("meteor_strike") is FailureKind.SERVER_ERROR
+    assert _mapped_failure_kind(None) is None
+    assert _mapped_failure_kind(7) is None
+
+
+def test_an_unknown_recorded_failure_kind_is_still_reported() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "outcome": "error",
+                "failure_kind": "meteor_strike",
+                "error_message": "something the vocabulary does not define",
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.SERVER_ERROR
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"method": "POST", "path": "/v1/chat/completions", "body": {"data": []}}, "wrong method"),
+        ({"path": "/v1/models/ft:gpt", "status": 200, "body": {"data": []}}, "a model sub-path"),
+        ({"path": 7, "status": 200, "body": {"data": []}}, "a non-string path"),
+        ("not-a-mapping", "an entry that is not a mapping"),
+    ],
+)
+def test_catalog_requests_that_are_not_the_catalog_request_are_skipped(
+    entry: object, expected: str
+) -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    assert _catalog_from_requests([entry]) is None, expected
+
+
+def test_a_catalog_response_without_a_json_body_is_not_an_empty_catalog() -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    assert _catalog_from_requests([{"path": "/v1/models", "status": 200}]) is None
+    assert _catalog_from_requests([{"path": "/v1/models", "status": 200, "body": "text"}]) is None
+    assert _catalog_from_requests("not-a-list") is None
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"detail": "explicit detail"}, "explicit detail"),
+        ({"error_message": "recorded message"}, "recorded message"),
+        ({"body": {"error": {"message": "nested message"}}}, "nested message"),
+        ({"body": {"error": "flat message"}}, "flat message"),
+        ({"body": {"error": {"code": "no-message-key"}}}, "recorded failure"),
+        ({"body": "not-a-mapping"}, "recorded failure"),
+        ({}, "recorded failure"),
+    ],
+    ids=[
+        "detail",
+        "error_message",
+        "nested",
+        "flat",
+        "no-message-key",
+        "body-not-a-mapping",
+        "empty",
+    ],
+)
+def test_a_failure_detail_is_read_from_whichever_shape_the_capture_used(
+    record: dict[str, object], expected: str
+) -> None:
+    from stealthbench.adapters.zen import _detail_of
+
+    assert _detail_of(record) == expected
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"headers": {"retry-after": "5"}}, 5.0),
+        ({"headers": {"Retry-After": "6"}}, 6.0),
+        ({"headers": {"retry-after": "0"}}, 0.0),
+        ({"headers": {"retry-after": 9}}, 9.0),
+        ({"headers": {"retry-after": "not-a-number"}}, None),
+        ({"headers": {"retry-after": True}}, None),
+        ({"headers": "not-a-mapping"}, None),
+        ({"headers": {}}, None),
+        ("not-a-mapping", None),
+        ({}, None),
+    ],
+    ids=[
+        "lower",
+        "capitalised",
+        "zero-is-a-value",
+        "numeric",
+        "not-a-number",
+        "boolean",
+        "headers-not-a-mapping",
+        "no-header",
+        "record-not-a-mapping",
+        "no-headers-key",
+    ],
+)
+def test_a_retry_after_is_read_from_whichever_shape_the_capture_used(
+    record: object, expected: float | None
+) -> None:
+    from stealthbench.adapters.zen import _retry_after
+
+    assert _retry_after(record) == expected
+
+
+def test_a_catalog_record_that_is_not_a_mapping_is_skipped() -> None:
+    snapshot = normalize_catalog({"data": ["not-a-mapping", {"id": "real"}]})
+    assert snapshot.aliases() == ("real",)
+
+
+def test_a_catalog_that_is_not_a_mapping_yields_an_empty_snapshot() -> None:
+    from stealthbench.adapters.zen import normalize_catalog
+
+    assert normalize_catalog("not-a-mapping").aliases() == ()
+    assert normalize_catalog({"data": "not-a-list"}).aliases() == ()
+
+
+def test_the_bundle_capabilities_accessor_returns_what_the_bundle_declared() -> None:
+    from stealthbench.adapters.base import FixtureBundle, FixtureTransport
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=True, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    transport = FixtureTransport(
+        FixtureBundle.model_validate({"name": "c", "capabilities": caps.model_dump()})
+    )
+    assert transport.capabilities() == caps
+
+
+# ---------------------------------------------------------------------------
+# The last uncovered paths, so no branch is exercised only by accident
+# ---------------------------------------------------------------------------
+
+
+def test_a_choice_that_is_not_a_mapping_yields_no_text() -> None:
+    from stealthbench.adapters.zen import extract_text
+
+    assert extract_text({"choices": ["not-a-mapping"]}) is None
+
+
+@pytest.mark.parametrize("bad", [True, -1, "5", 3.5])
+def test_a_junk_token_count_in_a_live_response_stays_absent(bad: object) -> None:
+    """The same coercion guard the fixture route uses, on the gateway route."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(usage={"prompt_tokens": bad, "completion_tokens": 4}),
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None
+    assert outcome.result.usage.input_tokens is None, f"{bad!r} is not a token count"
+    assert outcome.result.usage.output_tokens == 4
+
+
+def test_a_captured_failure_record_that_is_not_a_mapping_is_still_reported() -> None:
+    """A malformed capture yields a reported absence, never an exception."""
+    instance = ZenAdapter(endpoint_id="alias-a", exchanges={"ifeval::item-1": "not-a-mapping"})
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    streamed = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert completed.failure is not None
+    assert streamed.failure is not None
+
+
+def test_usage_reported_beside_the_choice_is_still_read() -> None:
+    """The top-level fallback, and a boolean there is skipped rather than read as 1."""
+    from stealthbench.adapters.zen import usage_from_response
+
+    top_level = usage_from_response(
+        {"input_tokens": 5, "output_tokens": 2, "choices": [{"message": {"content": "x"}}]}
+    )
+    assert top_level.input_tokens == 5
+    assert top_level.output_tokens == 2
+
+    junk = usage_from_response(
+        {"input_tokens": True, "output_tokens": "3", "choices": [{"message": {"content": "x"}}]}
+    )
+    assert junk.input_tokens is None, "a bool is not one token"
+    assert junk.output_tokens is None, "a numeric string is not a token count"
+
+
+def test_a_detail_reader_given_a_non_mapping_returns_the_generic_detail() -> None:
+    """Defence in depth: the record lookup already rejects one, but the reader is public."""
+    from stealthbench.adapters.zen import _detail_of
+
+    assert _detail_of("not-a-mapping") == "recorded failure"
+    assert _detail_of(None) == "recorded failure"

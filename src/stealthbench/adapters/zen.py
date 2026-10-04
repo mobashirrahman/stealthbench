@@ -144,12 +144,11 @@ def normalize_catalog(
         models = []
 
     entries: list[CatalogEntry] = []
-    if isinstance(models, list):
-        normalizer = _CatalogNormalizer()
-        for item in models:
-            entry = normalizer.entry(item, extra_secrets=extra_secrets)
-            if entry is not None:
-                entries.append(entry)
+    normalizer = _CatalogNormalizer()
+    for item in models:
+        entry = normalizer.entry(item, extra_secrets=extra_secrets)
+        if entry is not None:
+            entries.append(entry)
 
     try:
         return CatalogSnapshot(
@@ -219,45 +218,37 @@ def usage_from_response(payload: Mapping[str, Any]) -> Usage:
     read independently and stays ``None`` when absent.
     """
 
-    def pick(*names: str) -> int | None:
-        for name in names:
-            value = payload.get(name)
-            if isinstance(value, bool):
-                continue
-            if isinstance(value, int) and value >= 0:
-                return value
-        return None
-
     raw = payload.get("usage")
     usage_map: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
 
-    def pick_usage(*names: str) -> int | None:
+    def pick(source: Mapping[str, Any], *names: str) -> int | None:
+        """The first usable count among ``names``.
+
+        A boolean is skipped rather than read as 1: ``True`` as a token count is a
+        fabricated measurement, and so is any negative or non-integer value.
+        """
         for name in names:
-            value = usage_map.get(name)
+            value = source.get(name)
             if isinstance(value, bool):
                 continue
             if isinstance(value, int) and value >= 0:
                 return value
         return None
 
-    input_tokens = pick_usage("input_tokens", "prompt_tokens")
-    output_tokens = pick_usage("output_tokens", "completion_tokens")
+    input_tokens = pick(usage_map, "input_tokens", "prompt_tokens")
+    output_tokens = pick(usage_map, "output_tokens", "completion_tokens")
     if input_tokens is None or output_tokens is None:
         # Fall back to the top level: some gateways put usage beside the choice.
-        input_tokens = (
-            input_tokens if input_tokens is not None else pick("input_tokens", "prompt_tokens")
-        )
-        output_tokens = (
-            output_tokens
-            if output_tokens is not None
-            else pick("output_tokens", "completion_tokens")
-        )
+        if input_tokens is None:
+            input_tokens = pick(payload, "input_tokens", "prompt_tokens")
+        if output_tokens is None:
+            output_tokens = pick(payload, "output_tokens", "completion_tokens")
     reported = input_tokens is not None or output_tokens is not None or isinstance(raw, Mapping)
     return Usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        cached_input_tokens=pick_usage("cached_input_tokens", "cache_read_input_tokens"),
-        reasoning_tokens=pick_usage("reasoning_tokens"),
+        cached_input_tokens=pick(usage_map, "cached_input_tokens", "cache_read_input_tokens"),
+        reasoning_tokens=pick(usage_map, "reasoning_tokens"),
         provider_reported=bool(reported),
     )
 
@@ -421,10 +412,17 @@ class ZenAdapter(ProviderAdapter):
         )
 
     def _record_for(self, sample_key: SampleKey) -> Mapping[str, Any] | None:
+        """The recorded exchange for a sample key, or ``None`` when there is none.
+
+        A transcript value that is not a mapping is not a record. Rejecting it here,
+        once, means every reader downstream can assume a mapping instead of each one
+        guarding itself, and a malformed capture becomes ``no_fixture`` rather than an
+        exception escaping the adapter.
+        """
         allow_unqualified = self._allows_unqualified(sample_key)
         for candidate in self._candidate_keys(sample_key, allow_unqualified=allow_unqualified):
             record = self._exchanges.get(candidate)
-            if record is not None:
+            if isinstance(record, Mapping):
                 return record
         return None
 
@@ -694,7 +692,7 @@ class ZenAdapter(ProviderAdapter):
 
 
 def _recorded_unsupported(
-    record: Mapping[str, Any] | None,
+    record: Any,
     request: ModelRequest,
     extra_secrets: frozenset[str] = frozenset(),
 ) -> tuple[UnsupportedSetting, ...]:
@@ -763,7 +761,11 @@ def _catalog_from_requests(requests: Any) -> Any:
     return None
 
 
-def _detail_of(record: Mapping[str, Any]) -> str:
+def _detail_of(record: Any) -> str:
+    if not isinstance(record, Mapping):
+        # A record that is not a mapping carries no detail; reporting the generic one
+        # is better than raising out of the adapter over a malformed capture.
+        return "recorded failure"
     detail = record.get("error_message", record.get("detail"))
     if isinstance(detail, str) and detail:
         return detail
@@ -779,7 +781,9 @@ def _detail_of(record: Mapping[str, Any]) -> str:
     return "recorded failure"
 
 
-def _retry_after(record: Mapping[str, Any]) -> float | None:
+def _retry_after(record: Any) -> float | None:
+    if not isinstance(record, Mapping):
+        return None
     headers = record.get("headers")
     if not isinstance(headers, Mapping):
         return None

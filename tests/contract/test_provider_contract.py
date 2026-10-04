@@ -1541,3 +1541,53 @@ def test_data_wins_over_models_when_a_catalog_carries_both_keys() -> None:
         entry = snapshot.get("shared-alias")
         assert entry is not None
         assert entry.capabilities.streaming is False, "`data` wins over `models`"
+
+
+def test_a_recorded_response_must_carry_a_body() -> None:
+    """The schema refuses a capture that would otherwise record a blank answer."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="must carry a response body"):
+        FixtureBundle.model_validate(
+            {
+                "name": "blanks",
+                "capabilities": NO_CAPABILITIES.model_dump(),
+                "exchanges": [
+                    {
+                        "endpoint_id": "fixture-a",
+                        "benchmark_id": "ifeval",
+                        "item_id": "syn-if-001",
+                        "outcome": "response",
+                    }
+                ],
+            }
+        )
+
+
+def test_a_catalog_entry_can_be_read_through_its_streaming_accessor() -> None:
+    from stealthbench.adapters.base import CatalogEntry
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    entry = CatalogEntry(
+        alias="a",
+        route="zen",
+        display_name=None,
+        provider=None,
+        family=None,
+        context_window=None,
+        capabilities=caps,
+        raw={},
+    )
+    assert entry.supports_streaming is True
+
+
+def test_an_absent_sentinel_field_reads_as_a_complete_capture() -> None:
+    """The shared reader's default, which the call sites short-circuit past."""
+    from stealthbench.adapters.base import read_terminated
+
+    assert read_terminated() is True
+    assert read_terminated(True) is True
+    assert read_terminated(False) is False

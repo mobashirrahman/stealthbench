@@ -23,8 +23,8 @@ class Mutation:
     ident: str
     defect: str
     path: str
-    old: str
-    new: str
+    old: str | tuple[str, ...]
+    new: str | tuple[str, ...]
     tests: str
     count: int = 1
 
@@ -647,6 +647,85 @@ MUTATIONS = (
         "tests/contract/test_zen_adapter.py",
     ),
     Mutation(
+        "M59",
+        "coverage: a non-mapping transcript record raises out of the adapter",
+        "src/stealthbench/adapters/zen.py",
+        (
+            "            if isinstance(record, Mapping):\n",
+            "                return record\n",
+        ),
+        (
+            "            if record is not None:\n",
+            "                return record  # type: ignore[return-value]\n",
+        ),
+        "tests/contract",
+    ),
+    Mutation(
+        "M60",
+        "coverage: the detail reader raises on a non-mapping record",
+        "src/stealthbench/adapters/zen.py",
+        "    if not isinstance(record, Mapping):\n",
+        "    if False:\n",
+        "tests/contract",
+    ),
+    Mutation(
+        "M61",
+        "coverage: a junk top-level usage value is read as a token count",
+        "src/stealthbench/adapters/zen.py",
+        (
+            "            if isinstance(value, bool):\n",
+            "                continue\n",
+            "            if isinstance(value, int) and value >= 0:\n",
+        ),
+        ("            if isinstance(value, (bool, int)) and (value is True or value >= 0):\n",),
+        "tests/contract",
+    ),
+    Mutation(
+        "M62",
+        "coverage: a corrupt byte mid-buffer is swallowed instead of surfaced",
+        "src/stealthbench/adapters/streaming.py",
+        (
+            "                if exc.start:\n",
+            '                    yield buffer[: exc.start].decode("utf-8", errors="replace")\n',
+        ),
+        ("                if exc.start and False:\n",),
+        "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M64",
+        "coverage: a stream parsed with no sample key is accepted anyway",
+        "src/stealthbench/adapters/streaming.py",
+        "    if sample_key is None:\n",
+        "    if False:\n",
+        "tests/contract/test_streaming.py",
+    ),
+    Mutation(
+        "M65",
+        "coverage: an unknown recorded failure kind is dropped instead of mapped",
+        "src/stealthbench/adapters/zen.py",
+        (
+            "    except ValueError:\n",
+            "        return FailureKind.SERVER_ERROR\n",
+        ),
+        (
+            "    except ValueError:\n",
+            "        return None\n",
+        ),
+        "tests/contract/test_zen_adapter.py",
+    ),
+    Mutation(
+        "M66",
+        "coverage: a usage-only stream with no produced tokens is accepted",
+        "src/stealthbench/adapters/streaming.py",
+        (
+            "    reported_output = assembly.usage.output_tokens\n",
+            "    if not assembly.saw_content"
+            " and not (reported_output is not None and reported_output > 0):\n",
+        ),
+        ("    if not assembly.saw_content and not assembly.usage.provider_reported:\n",),
+        "tests/contract",
+    ),
+    Mutation(
         "M9",
         "new: the catalog is not read from the recorded GET /models response",
         "src/stealthbench/adapters/zen.py",
@@ -674,6 +753,11 @@ def _restore_on_exit(target: Path, original: str):
     return restore
 
 
+def _text(value: str | tuple[str, ...]) -> str:
+    """A mutation's anchor or replacement, whether written inline or as line tuples."""
+    return value if isinstance(value, str) else "".join(value)
+
+
 def stale_anchors() -> list[str]:
     """Mutations whose anchor no longer matches the source.
 
@@ -682,7 +766,7 @@ def stale_anchors() -> list[str]:
     """
     stale = []
     for mutation in MUTATIONS:
-        if mutation.old not in (ROOT / mutation.path).read_text(encoding="utf-8"):
+        if _text(mutation.old) not in (ROOT / mutation.path).read_text(encoding="utf-8"):
             stale.append(mutation.ident)
     return stale
 
@@ -712,12 +796,13 @@ def main() -> int:
     for mutation in MUTATIONS:
         target = ROOT / mutation.path
         original = target.read_text(encoding="utf-8")
-        if mutation.old not in original:
+        if _text(mutation.old) not in original:
             failures.append(f"{mutation.ident}: anchor not found in {mutation.path}")
             emit(f"{mutation.ident} SKIP  anchor missing")
             continue
         target.write_text(
-            original.replace(mutation.old, mutation.new, mutation.count), encoding="utf-8"
+            original.replace(_text(mutation.old), _text(mutation.new), mutation.count),
+            encoding="utf-8",
         )
         # Restore on any exit, including an interrupt that skips the finally block:
         # a reviewer who times this script out must not be left with a mutated adapter.

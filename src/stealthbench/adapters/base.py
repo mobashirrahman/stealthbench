@@ -482,11 +482,9 @@ class FixtureTransport(ProviderAdapter):
         and it is reported as empty rather than filled with plausible aliases.
         """
         raw = dict(self.bundle.catalog)
+        # `_catalog_models` returns a list or nothing, so a malformed catalog is an
+        # empty observation rather than an exception raised out of discovery.
         models = _catalog_models(raw)
-        if not isinstance(models, Sequence) or isinstance(models, (str, bytes)):
-            # A malformed catalog is an empty observation, not an exception: discovery
-            # must never take the campaign down on one bad fixture.
-            models = []
         entries: list[CatalogEntry] = []
         for index, item in enumerate(models):
             if not isinstance(item, dict):
