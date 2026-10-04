@@ -253,7 +253,6 @@ def test_missing_report_output_flag_is_rejected(repo_root: Path) -> None:
 def test_unimplemented_commands_report_pending_and_claim_no_result(repo_root: Path) -> None:
     """Declared-but-unimplemented commands must not look like successes."""
     invocations = [
-        ("run", "configs/offline-demo.json"),
         ("replay", "configs/offline-demo.json"),
         ("report", "configs/offline-demo.json", "--output", "/tmp/should-not-be-written"),
         ("signatures", "configs/offline-demo.json"),
@@ -269,6 +268,38 @@ def test_unimplemented_commands_report_pending_and_claim_no_result(repo_root: Pa
         assert payload["gate"].startswith("G")
         for token in FORBIDDEN_CLAIM_TOKENS:
             assert token not in combined, f"{args} emitted forbidden claim token {token}"
+
+
+def test_run_offline_exits_not_implemented_and_writes_no_result(
+    repo_root: Path,
+) -> None:
+    """``run`` gained authorization and refusal in G04; the loop lands in G05.
+
+    Until then it must keep the pending-command contract: exit 3, no result on stdout,
+    and no forbidden claim token anywhere.
+    """
+    result = _run_cli("run", "configs/offline-demo.json")
+    combined = result.stdout + result.stderr
+    assert result.returncode == EXIT_NOT_IMPLEMENTED, (result.returncode, combined)
+    assert result.stdout == "", f"run wrote a result to stdout: {result.stdout!r}"
+    payload = json.loads(result.stderr.splitlines()[-1])
+    assert payload["status"] == "not_implemented"
+    assert payload["command"] == "run"
+    for token in FORBIDDEN_CLAIM_TOKENS:
+        assert token not in combined, f"run emitted forbidden claim token {token}"
+
+
+def test_run_live_refusal_names_blockers_and_claims_no_dispatch() -> None:
+    """An unauthorized live run must refuse with a list, never a dispatch count."""
+    result = _run_cli("run", "configs/offline-demo.json", "--live")
+    combined = result.stdout + result.stderr
+    assert result.returncode == EXIT_USAGE, (result.returncode, combined)
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "refused"
+    assert payload["dispatched"] == 0
+    assert payload["blockers"]
+    for token in FORBIDDEN_CLAIM_TOKENS:
+        assert token not in combined, f"run emitted forbidden claim token {token}"
 
 
 def test_unimplemented_report_does_not_create_output_directory(

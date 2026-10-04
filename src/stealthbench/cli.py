@@ -121,9 +121,59 @@ def cmd_manifest_validate(args: argparse.Namespace, stdout: TextIO, stderr: Text
 
 
 def cmd_run(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
-    """Execute a campaign."""
-    del args, stdout, stderr
-    raise GatePending("run", "G04")
+    """Execute a campaign, or report exactly why it cannot run.
+
+    Offline is the default and is structural: without ``--live`` no provider is
+    contacted, because there is no fixture transport wired to this command yet. A live
+    run additionally requires a configured credential and an operator spending cap, and
+    is refused naming what is missing.
+    """
+    from pydantic import ValidationError
+
+    from stealthbench.runner import RunMode, resolve_mode
+    from stealthbench.schemas.campaign import Authorization, CampaignManifest
+
+    try:
+        manifest = CampaignManifest.model_validate_json(Path(args.path).read_text(encoding="utf-8"))
+    except ValidationError as exc:
+        raise UserError(f"{args.path} is not a valid campaign manifest:\n{exc}") from exc
+    except OSError as exc:
+        raise UserError(f"cannot read {args.path}: {exc.strerror or exc}") from exc
+
+    mode = RunMode.LIVE if args.live else RunMode.OFFLINE
+    # A manifest with no authorization block has not been approved by an operator. That
+    # is the same state as an approval whose cap was never set: asserted, uncapped.
+    authorization = manifest.authorization or Authorization()
+    missing = resolve_mode(
+        requested=mode,
+        authorization=authorization,
+        credentials_configured=False,
+        spending_cap=authorization.spending_cap_usd,
+    )
+    if missing:
+        # Refusing with the list is more useful than a permission error from deeper in.
+        print(
+            json.dumps(
+                {
+                    "blockers": [f"live execution is missing: {item}" for item in missing],
+                    "campaign_id": manifest.campaign_id,
+                    "dispatched": 0,
+                    "mode": str(mode),
+                    "status": "refused",
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            file=stdout,
+        )
+        return EXIT_USAGE
+    # Offline execution needs the fixture transports the adapters layer provides; the
+    # campaign loop lands with the vertical workflow in G05.
+    #
+    # Exit 3, not 0. A caller that sees success would conclude the campaign ran, and an
+    # exit code is the only part of this output a script cannot misread.
+    print(f"{PROG}: error: 'run' has no offline dispatch loop yet", file=stderr)
+    raise GatePending("run", "G05")
 
 
 def cmd_replay(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
@@ -202,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--offline",
         action="store_true",
         help="forbid all provider network access; use recorded fixture responses only",
+    )
+    run.add_argument(
+        "--live",
+        action="store_true",
+        help="dispatch to a provider; requires authorization, credentials and a spending cap",
     )
     run.set_defaults(handler=cmd_run)
 

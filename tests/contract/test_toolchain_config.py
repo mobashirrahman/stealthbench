@@ -8,6 +8,7 @@ behaviour or through a generated test run.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import socket
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from stealthbench.cli import build_parser
+from stealthbench.cli import EXIT_NOT_IMPLEMENTED, build_parser
 from tests.conftest import REPO_ROOT, NetworkAccessDenied
 
 pytestmark = pytest.mark.contract
@@ -370,3 +371,80 @@ def test_live_and_paid_suites_exist_and_are_marked() -> None:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "::" in result.stdout, f"no test carries @{marker}; it must exist and be labelled"
+
+
+# ---------------------------------------------------------------------------
+# `run` refuses rather than contacting a provider it cannot authorize
+# ---------------------------------------------------------------------------
+
+
+def _run_cli(*argv: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "stealthbench.cli", *argv],
+        capture_output=True,
+        text=True,
+        cwd=cwd or REPO_ROOT,
+        check=False,
+    )
+
+
+def test_run_offline_does_not_demand_authorization() -> None:
+    """Offline never needs a credential or a cap, so it must not ask for one.
+
+    The blockers list is what a live refusal prints. Offline has no blockers to report,
+    even though it cannot dispatch yet.
+    """
+    result = _run_cli("run", "configs/offline-demo.json")
+    assert result.returncode == EXIT_NOT_IMPLEMENTED, result.stderr
+    assert "credentials" not in result.stderr
+    assert "spending cap" not in result.stderr
+
+
+def test_run_offline_never_claims_to_have_dispatched() -> None:
+    """A campaign that did not dispatch must not report a number of dispatches."""
+    result = _run_cli("run", "configs/offline-demo.json")
+    assert result.returncode == EXIT_NOT_IMPLEMENTED, result.stderr
+    assert result.stdout == "", f"run wrote to stdout: {result.stdout!r}"
+    payload = json.loads(result.stderr.splitlines()[-1])
+    assert "dispatched" not in payload, (
+        "the offline dispatch loop has not landed; `run` must not report a dispatch "
+        "count, not even zero, because zero is indistinguishable from a real run"
+    )
+
+
+def test_run_live_is_refused_naming_each_missing_requirement() -> None:
+    """A live run without credentials or a cap refuses, and says what is missing."""
+    result = _run_cli("run", "configs/offline-demo.json", "--live")
+    assert result.returncode == 2, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "refused"
+    assert payload["dispatched"] == 0
+    blockers = " ".join(payload["blockers"])
+    assert "credentials" in blockers
+    assert "spending cap" in blockers
+
+
+def test_run_live_with_a_dry_run_flag_is_not_silently_ignored() -> None:
+    """`--dry-run` was a documented flag that the parser never defined.
+
+    A caller passing it must get a usage error, not a live dispatch.
+    """
+    result = _run_cli("run", "configs/offline-demo.json", "--dry-run")
+    assert result.returncode == 2, result.stderr
+    assert "dry-run" in (result.stderr + result.stdout)
+
+
+def test_run_rejects_an_invalid_manifest_before_authorization() -> None:
+    """Validation is a precondition: a bad document fails before anything else."""
+    bad = REPO_ROOT / "tests" / "fixtures" / "invalid-manifest.json"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text('{"schema_version": "1.0", "campaign_id": "x"}\n', encoding="utf-8")
+    try:
+        # EXIT_ERROR, matching `manifest validate`: a bad document is an error, and
+        # the same exit code must not depend on which command read it.
+        result = _run_cli("run", str(bad.relative_to(REPO_ROOT)))
+        assert result.returncode == 1, result.stderr
+        assert "not a valid campaign manifest" in result.stderr
+        assert "blockers" not in result.stdout
+    finally:
+        bad.unlink()

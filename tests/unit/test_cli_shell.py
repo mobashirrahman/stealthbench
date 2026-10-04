@@ -19,11 +19,15 @@ from stealthbench.cli import (
     build_parser,
     main,
 )
+from tests.conftest import REPO_ROOT
 
 #: Commands the plan declares, and the gate each one belongs to.
 #: Commands still awaiting their gate. `manifest validate` left this set in G01.
-DECLARED_COMMANDS = {
-    ("run",): "G04",
+#: Commands that are declared but not yet implemented. ``run`` left this set in G04: it
+#: validates its input, resolves the mode, and refuses an unauthorized live run, but the
+#: offline dispatch loop lands with the vertical workflow in G05. It now exits 3 with the
+#: same payload shape rather than 0, because exit 0 would read as a completed campaign.
+PENDING_COMMANDS = {
     ("replay",): "G02",
     ("report",): "G13",
     ("signatures",): "G11",
@@ -63,7 +67,7 @@ def test_parser_accepts_every_declared_command(tmp_path: Path) -> None:
     manifest = tmp_path / "campaign.json"
     manifest.write_text("{}", encoding="utf-8")
     parser = build_parser()
-    for argv_prefix in DECLARED_COMMANDS:
+    for argv_prefix in [*PENDING_COMMANDS, ("run",)]:
         extra = ["--output", str(tmp_path / "out")] if argv_prefix == ("report",) else []
         argv = [*argv_prefix, str(manifest), *extra]
         assert parser.parse_args(argv).command == argv_prefix[0]
@@ -71,7 +75,7 @@ def test_parser_accepts_every_declared_command(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("argv_prefix", "expected_command"),
-    [(key, " ".join(key)) for key in DECLARED_COMMANDS],
+    [(key, " ".join(key)) for key in PENDING_COMMANDS],
 )
 def test_pending_command_names_its_gate(
     argv_prefix: tuple[str, ...],
@@ -93,7 +97,7 @@ def test_pending_command_names_its_gate(
     payload = json.loads(captured.err.splitlines()[-1])
     assert payload["status"] == "not_implemented"
     assert payload["command"] == expected_command
-    assert payload["gate"] == DECLARED_COMMANDS[argv_prefix]
+    assert payload["gate"] == PENDING_COMMANDS[argv_prefix]
     assert not (tmp_path / "out").exists(), "a pending command must not write artifacts"
 
 
@@ -199,3 +203,57 @@ def test_schema_layer_is_imported_lazily_inside_the_manifest_handler() -> None:
             imported_inside.add(node.module.split(".")[0])
     assert "pydantic" in imported_inside
     assert "stealthbench" in imported_inside
+
+
+def _offline_manifest(*, campaign_id: str) -> dict:
+    """A schema-valid offline manifest, derived from the committed demo profile.
+
+    Reusing the shipped file rather than hand-rolling one keeps these tests honest: a
+    hand-written manifest could drift from the schema without failing here.
+    """
+    payload = json.loads((REPO_ROOT / "configs" / "offline-demo.json").read_text(encoding="utf-8"))
+    payload["campaign_id"] = campaign_id
+    payload.pop("authorization", None)
+    return payload
+
+
+def test_run_refuses_an_unauthorized_live_run_without_dispatching(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``run`` landed in G04: it refuses, and names every missing requirement.
+
+    The refusal must not look like a completed campaign, so it exits with the usage
+    code and reports zero dispatches.
+    """
+    manifest = tmp_path / "campaign.json"
+    manifest.write_text(
+        json.dumps(_offline_manifest(campaign_id="c-live-refused")), encoding="utf-8"
+    )
+    assert main(["run", str(manifest), "--live"]) == EXIT_USAGE
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "refused"
+    assert payload["dispatched"] == 0
+    assert payload["blockers"], "a refusal must say what is missing, not just that it is missing"
+
+
+def test_run_offline_exits_not_implemented_rather_than_succeeding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Offline ``run`` has no dispatch loop yet and must not exit 0.
+
+    A zero exit is the one thing in this output a calling script cannot misread, so an
+    undispatched campaign has to fail rather than look finished.
+    """
+    manifest = tmp_path / "campaign.json"
+    manifest.write_text(json.dumps(_offline_manifest(campaign_id="c-offline")), encoding="utf-8")
+    assert main(["run", str(manifest)]) == EXIT_NOT_IMPLEMENTED
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err.splitlines()[-1])
+    assert payload["status"] == "not_implemented"
+    assert payload["command"] == "run"
+    assert payload["gate"] == "G05"
+    assert captured.out == "", "a pending run must not write a result to stdout"
