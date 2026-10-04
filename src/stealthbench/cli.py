@@ -56,6 +56,13 @@ def _existing_file(value: str) -> Path:
     return path
 
 
+def _existing_path(value: str) -> Path:
+    path = Path(value)
+    if not path.exists():
+        raise UserError(f"no such file or directory: {value}")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Implemented commands
 # ---------------------------------------------------------------------------
@@ -123,10 +130,12 @@ def cmd_manifest_validate(args: argparse.Namespace, stdout: TextIO, stderr: Text
 def cmd_run(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
     """Execute a campaign, or report exactly why it cannot run.
 
-    Offline is the default and is structural: without ``--live`` no provider is
-    contacted, because there is no fixture transport wired to this command yet. A live
-    run additionally requires a configured credential and an operator spending cap, and
-    is refused naming what is missing.
+    ``--offline`` dispatches through the fixture-only vertical workflow (G05):
+    no provider socket, caps enforced, grades via the IFEval wrapper, redacted
+    exports written. Without ``--offline`` (and without ``--live``) the command
+    remains pending so a bare invocation can never read as a completed campaign.
+    A live run additionally requires a configured credential and an operator
+    spending cap, and is refused naming what is missing.
     """
     from pydantic import ValidationError
 
@@ -167,25 +176,84 @@ def cmd_run(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
             file=stdout,
         )
         return EXIT_USAGE
-    # Offline execution needs the fixture transports the adapters layer provides; the
-    # campaign loop lands with the vertical workflow in G05.
-    #
-    # Exit 3, not 0. A caller that sees success would conclude the campaign ran, and an
-    # exit code is the only part of this output a script cannot misread.
-    print(f"{PROG}: error: 'run' has no offline dispatch loop yet", file=stderr)
-    raise GatePending("run", "G05")
+    if not bool(getattr(args, "offline", False)):
+        # Bare `run` without an explicit mode flag stays pending: exit 3, not 0.
+        # A caller that sees success would conclude the campaign ran, and an
+        # exit code is the only part of this output a script cannot misread.
+        print(f"{PROG}: error: 'run' needs --offline (fixture) or --live", file=stderr)
+        raise GatePending("run", "G05")
+
+    from stealthbench.benchmarks.workflow import load_fixture_bundle, run_offline
+
+    fixture_bundle = None
+    fixture_arg = getattr(args, "fixture", None)
+    if fixture_arg is not None:
+        try:
+            fixture_bundle = load_fixture_bundle(Path(fixture_arg))
+        except (OSError, ValueError) as exc:
+            raise UserError(f"cannot load fixture bundle {fixture_arg}: {exc}") from exc
+    output_arg = getattr(args, "output", None)
+    artifacts_dir = (
+        Path(output_arg) if output_arg is not None else Path("artifacts") / manifest.campaign_id
+    )
+    try:
+        report = run_offline(
+            manifest,
+            artifacts_dir=artifacts_dir,
+            fixture_bundle=fixture_bundle,
+        )
+    except ValueError as exc:
+        raise UserError(str(exc)) from exc
+    print(json.dumps(report.to_dict(), indent=2, sort_keys=True), file=stdout)
+    return EXIT_OK
 
 
 def cmd_replay(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
     """Reconstruct stored samples and grades without contacting a provider."""
-    del args, stdout, stderr
-    raise GatePending("replay", "G02")
+    from stealthbench.benchmarks.workflow import replay_offline
+
+    root = Path(args.path)
+    if not root.exists():
+        raise UserError(f"no such file or directory: {args.path}")
+    if root.is_file() or not (root / "events.jsonl").exists():
+        raise UserError(
+            f"{args.path} is not an artifact directory: expected events.jsonl inside it"
+        )
+    try:
+        summary = replay_offline(root)
+    except ValueError as exc:
+        raise UserError(str(exc)) from exc
+    except Exception as exc:
+        raise UserError(f"cannot replay {args.path}: {exc}") from exc
+    del stderr
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True), file=stdout)
+    return EXIT_OK
 
 
 def cmd_report(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
-    """Build a static report from stored artifacts."""
-    del args, stdout, stderr
-    raise GatePending("report", "G13")
+    """Build a static report from stored artifacts.
+
+    Offline by construction: reads the artifact directory only and writes a
+    browsable static site plus redacted JSON/CSV exports. Never contacts a
+    provider and never deploys anywhere; review serving is loopback-only.
+    """
+    from stealthbench.reporting.site import build_report
+
+    del stderr
+    root = Path(args.path)
+    if not root.exists():
+        raise UserError(f"no such file or directory: {args.path}")
+    if root.is_file() or not (root / "manifest.json").exists():
+        raise UserError(
+            f"{args.path} is not an artifact directory: expected manifest.json inside it"
+        )
+    output = Path(args.output)
+    try:
+        summary = build_report(root, output)
+    except ValueError as exc:
+        raise UserError(str(exc)) from exc
+    print(json.dumps(summary, indent=2, sort_keys=True), file=stdout)
+    return EXIT_OK
 
 
 def cmd_signatures(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
@@ -201,11 +269,85 @@ def cmd_identify(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> in
 
 
 def cmd_doctor(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
-    """Report which optional runtimes and datasets are actually available."""
+    """Report which optional runtimes and datasets are actually available.
+
+    Offline and dependency-free by construction: no provider socket, no
+    credential, no dataset download. Container-only capabilities report
+    ``blocked_external`` when the runtime is absent instead of fake-passing,
+    and official datasets report ``blocked_external`` until their revisions
+    are pinned and materialized. Never prints a benchmark outcome.
+    """
+    import platform
+
     del args, stderr
-    stdout.write(json.dumps({"status": "not_implemented", "gate": "G14"}, sort_keys=True))
-    stdout.write("\n")
-    return EXIT_NOT_IMPLEMENTED
+    from stealthbench.sandbox.runtime import (
+        container_runtime,
+        memory_limit_enforceable,
+        posix_rlimit_available,
+    )
+
+    runtime_name = container_runtime()
+    if runtime_name is None:
+        container_state = "blocked_external"
+        container_reason = "blocked_external: no container runtime (docker/podman) on PATH"
+    else:
+        container_state = "ready"
+        container_reason = None
+
+    configs: dict[str, str] = {}
+    try:
+        from stealthbench.schemas.campaign import CampaignManifest as _Manifest
+
+        manifest_layer: Any = _Manifest
+    except ImportError:
+        manifest_layer = None
+    for profile in ("offline-demo", "pilot", "full"):
+        candidate = Path(f"configs/{profile}.json")
+        if not candidate.is_file():
+            configs[profile] = "missing"
+            continue
+        if manifest_layer is None:
+            configs[profile] = "unknown-dependency-unavailable"
+            continue
+        try:
+            manifest = manifest_layer.model_validate_json(candidate.read_text(encoding="utf-8"))
+            blockers = manifest.dispatch_blockers()
+            if not blockers:
+                configs[profile] = "valid-dispatchable"
+            elif not manifest.materialized:
+                configs[profile] = "valid-unmaterialized"
+            else:
+                configs[profile] = "valid-blocked"
+        except Exception:
+            configs[profile] = "invalid"
+
+    inventory = Path("docs/upstream-inventory.md")
+    payload: dict[str, Any] = {
+        "configs": configs,
+        "container_reason": container_reason,
+        "container_runtime": runtime_name,
+        "container_state": container_state,
+        "datasets": {
+            "inventory": "available" if inventory.is_file() else "missing",
+            "official": (
+                "blocked_external: revisions unpinned and selection "
+                "unmaterialized until G05/G08 freeze them"
+            ),
+            "offline_demo": (
+                "available" if configs.get("offline-demo") == "valid-dispatchable" else "missing"
+            ),
+        },
+        "memory_limit_enforceable": memory_limit_enforceable(),
+        "platform": platform.system(),
+        "posix_rlimit": posix_rlimit_available(),
+        "python": platform.python_version(),
+        "sandbox_backend": "subprocess-disposable",
+        "schema_version": SCHEMA_VERSION,
+        "status": "ok",
+        "version": __version__,
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True), file=stdout)
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -258,14 +400,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="dispatch to a provider; requires authorization, credentials and a spending cap",
     )
+    run.add_argument(
+        "--output",
+        type=Path,
+        required=False,
+        default=None,
+        help="artifact directory (default: artifacts/<campaign_id>)",
+    )
+    run.add_argument(
+        "--fixture",
+        type=Path,
+        required=False,
+        default=None,
+        help="recorded fixture bundle JSON for offline dispatch",
+    )
     run.set_defaults(handler=cmd_run)
 
     replay = subparsers.add_parser("replay", help="rebuild stored results without a provider")
-    replay.add_argument("path", type=_existing_file, help="path to the artifact directory")
+    replay.add_argument("path", type=_existing_path, help="path to the artifact directory")
     replay.set_defaults(handler=cmd_replay)
 
     report = subparsers.add_parser("report", help="build a static report from artifacts")
-    report.add_argument("path", type=_existing_file, help="path to the artifact directory")
+    report.add_argument("path", type=_existing_path, help="path to the artifact directory")
     report.add_argument(
         "--output", type=Path, required=True, help="directory to write the report into"
     )

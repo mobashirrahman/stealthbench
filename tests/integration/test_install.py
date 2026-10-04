@@ -252,9 +252,10 @@ def test_missing_report_output_flag_is_rejected(repo_root: Path) -> None:
 
 def test_unimplemented_commands_report_pending_and_claim_no_result(repo_root: Path) -> None:
     """Declared-but-unimplemented commands must not look like successes."""
+    # `replay` left this set in G05 T05C (now reconstructs offline); `run
+    # --offline` is covered by the vertical workflow test; `report` left it
+    # in G13 (now builds a static site offline).
     invocations = [
-        ("replay", "configs/offline-demo.json"),
-        ("report", "configs/offline-demo.json", "--output", "/tmp/should-not-be-written"),
         ("signatures", "configs/offline-demo.json"),
         ("identify", "configs/offline-demo.json"),
     ]
@@ -302,17 +303,28 @@ def test_run_live_refusal_names_blockers_and_claims_no_dispatch() -> None:
         assert token not in combined, f"run emitted forbidden claim token {token}"
 
 
-def test_unimplemented_report_does_not_create_output_directory(
+def test_report_rejects_non_artifact_input_without_writing_report(
     repo_root: Path, tmp_path: Path
 ) -> None:
+    """`report` landed in G13: a manifest is not an artifact directory."""
     target = tmp_path / "report-out"
     result = _run_cli("report", "configs/offline-demo.json", "--output", str(target))
-    assert result.returncode == EXIT_NOT_IMPLEMENTED
-    assert not target.exists(), "a pending command must not write output artifacts"
+    assert result.returncode == EXIT_ERROR
+    assert not (target / "index.html").exists(), "a rejected report must not write a site"
 
 
-def test_doctor_reports_not_implemented_instead_of_inventing_availability() -> None:
+def test_doctor_reports_runtime_and_dataset_availability_offline() -> None:
+    """`doctor` (G14) exits 0 with availability, inventing no evaluation claim."""
     result = _run_cli("doctor")
-    assert result.returncode == EXIT_NOT_IMPLEMENTED
+    combined = result.stdout + result.stderr
+    assert result.returncode == EXIT_OK, (result.returncode, combined)
     payload = json.loads(result.stdout)
-    assert payload == {"gate": "G14", "status": "not_implemented"}
+    assert payload["status"] == "ok"
+    assert payload["schema_version"] == "1.0"
+    assert payload["configs"]["offline-demo"] == "valid-dispatchable"
+    assert payload["container_state"] in ("ready", "blocked_external")
+    if payload["container_state"] == "blocked_external":
+        assert "blocked_external" in (payload["container_reason"] or "")
+    assert payload["datasets"]["offline_demo"] == "available"
+    for token in FORBIDDEN_CLAIM_TOKENS:
+        assert token not in combined, f"doctor emitted forbidden claim token {token}"

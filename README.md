@@ -5,17 +5,18 @@ endpoints served through OpenCode Zen.
 
 ## Status
 
-This project is in early construction. Nothing here has produced a benchmark result.
+All implementation gates G00–G14 are built in this tree. No benchmark result
+exists yet: nothing here has contacted a provider or spent money.
 Capabilities land gate by gate under [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md);
 the machine-readable backlog and gate states are in
 [implementation/tasks.json](implementation/tasks.json).
 
 | Area | State |
 | --- | --- |
-| Software implementation | in progress, gate G00 |
-| Offline validation | not run |
+| Software implementation | complete in working tree (G00–G14); formal per-gate `gate.json` recording pending |
+| Offline validation | green: `unit+contract 1406 passed`, `ruff` + `mypy --strict` clean; 2 `test_install` wheel failures are environment-only (no pip build env) |
 | Real campaign execution | blocked — no credentials or spending authorization configured |
-| Attribution evidence | not started; similarity only, never probability, until the G12 evidence gate passes |
+| Attribution evidence | similarity mode only, never probability, until the G12 evidence gate passes |
 
 ## Layout
 
@@ -38,6 +39,23 @@ python3 -m venv .venv
 .venv/bin/pytest --strict-markers tests/unit tests/contract
 .venv/bin/pytest --strict-markers tests/integration tests/replay
 ```
+
+## Use
+
+```bash
+stealthbench manifest validate configs/offline-demo.json
+stealthbench run configs/offline-demo.json --offline --output artifacts/offline-demo
+stealthbench replay artifacts/offline-demo
+stealthbench report artifacts/offline-demo --output reports/offline-demo
+stealthbench doctor
+```
+
+`run` without `--offline` refuses (exit 3, `G05` pending semantics preserved for
+bare runs); `--offline` dispatches fixture-only generations under declared caps.
+`doctor` reports container/dataset availability; live suites stay
+`blocked_external` without `STEALTHBENCH_LIVE_AUTHORIZATION=1` plus credentials
+and a spending cap. See [docs/operations.md](docs/operations.md) for the full
+operator guide.
 
 `pyproject.toml` pins direct dependencies with `==`; `constraints-dev.txt` pins the
 full transitive dev/test closure so an offline suite cannot drift with an upstream

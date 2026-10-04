@@ -23,13 +23,11 @@ from tests.conftest import REPO_ROOT
 
 #: Commands the plan declares, and the gate each one belongs to.
 #: Commands still awaiting their gate. `manifest validate` left this set in G01.
-#: Commands that are declared but not yet implemented. ``run`` left this set in G04: it
-#: validates its input, resolves the mode, and refuses an unauthorized live run, but the
-#: offline dispatch loop lands with the vertical workflow in G05. It now exits 3 with the
-#: same payload shape rather than 0, because exit 0 would read as a completed campaign.
+#: `run --offline` and `replay` left it in G05 T05C (offline dispatch loop and
+#: replay reconstruction). Bare `run` without --offline/--live stays pending so
+#: an undispatched campaign can never read as a completed one. `report` left
+#: it in G13 T13A-C (static site, exports and canary scheduling).
 PENDING_COMMANDS = {
-    ("replay",): "G02",
-    ("report",): "G13",
     ("signatures",): "G11",
     ("identify",): "G12",
 }
@@ -67,7 +65,7 @@ def test_parser_accepts_every_declared_command(tmp_path: Path) -> None:
     manifest = tmp_path / "campaign.json"
     manifest.write_text("{}", encoding="utf-8")
     parser = build_parser()
-    for argv_prefix in [*PENDING_COMMANDS, ("run",)]:
+    for argv_prefix in [*PENDING_COMMANDS, ("run",), ("report",)]:
         extra = ["--output", str(tmp_path / "out")] if argv_prefix == ("report",) else []
         argv = [*argv_prefix, str(manifest), *extra]
         assert parser.parse_args(argv).command == argv_prefix[0]
@@ -86,11 +84,8 @@ def test_pending_command_names_its_gate(
     """Each unimplemented command must name the gate that will implement it."""
     manifest = tmp_path / "campaign.json"
     manifest.write_text("{}", encoding="utf-8")
-    extra: list[str] = []
-    if argv_prefix == ("report",):
-        extra = ["--output", str(tmp_path / "out")]
 
-    assert main([*argv_prefix, str(manifest), *extra]) == EXIT_NOT_IMPLEMENTED
+    assert main([*argv_prefix, str(manifest)]) == EXIT_NOT_IMPLEMENTED
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -144,14 +139,26 @@ def test_pending_command_writes_status_to_stderr_not_stdout(
 ) -> None:
     manifest = tmp_path / "campaign.json"
     manifest.write_text("{}", encoding="utf-8")
-    assert main(["replay", str(manifest)]) == EXIT_NOT_IMPLEMENTED
+    assert main(["signatures", str(manifest)]) == EXIT_NOT_IMPLEMENTED
     captured = capsys.readouterr()
     assert captured.out == ""
     assert json.loads(captured.err.splitlines()[-1]) == {
-        "command": "replay",
-        "gate": "G02",
+        "command": "signatures",
+        "gate": "G11",
         "status": "not_implemented",
     }
+
+
+def test_report_rejects_a_non_artifact_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`report` landed in G13: a non-artifact input is a user error, not pending."""
+    manifest = tmp_path / "campaign.json"
+    manifest.write_text("{}", encoding="utf-8")
+    assert main(["report", str(manifest), "--output", str(tmp_path / "out")]) == EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not an artifact directory" in captured.err
 
 
 def test_cli_shell_imports_no_third_party_dependency() -> None:
