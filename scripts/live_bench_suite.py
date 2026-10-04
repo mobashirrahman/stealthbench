@@ -113,7 +113,7 @@ def math_prompt(item: dict) -> str:
     )
 
 
-def run_mmlu(items: list[dict], model: str, seed: int, out: Path) -> dict:
+def run_mmlu(items: list[dict], model: str, seed: int, out: Path, max_tokens: int = 64) -> dict:
     by_cat: dict[str, list[dict]] = {}
     for it in items:
         by_cat.setdefault(it["category"], []).append(it)
@@ -140,7 +140,7 @@ def run_mmlu(items: list[dict], model: str, seed: int, out: Path) -> dict:
     correct = invalid = failed = 0
     with (out / "mmlu_generations.jsonl").open("w") as f:
         for i, item in enumerate(chosen):
-            res = post(model, mmlu_prompt(item), max_tokens=64)
+            res = post(model, mmlu_prompt(item), max_tokens=max_tokens)
             entry: dict = {
                 "question_id": item["question_id"],
                 "category": item["category"],
@@ -242,6 +242,8 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20261004)
     ap.add_argument("--output", required=True)
     ap.add_argument("--only", choices=["mmlu", "math"], default=None)
+    ap.add_argument("--max-tokens-mmlu", type=int, default=64)
+    ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
     out = Path(args.output)
@@ -257,12 +259,15 @@ def main() -> int:
         mmlu_items = [
             json.loads(line) for line in Path(args.mmlu).read_text().splitlines() if line.strip()
         ]
-        summary["mmlu_pro"] = run_mmlu(mmlu_items, args.model, args.seed, out)
+        summary["mmlu_pro"] = run_mmlu(mmlu_items, args.model, args.seed, out, args.max_tokens_mmlu)
+        summary["mmlu_pro"]["max_tokens"] = args.max_tokens_mmlu
     if args.only in (None, "math"):
         math_items = [
             json.loads(line) for line in Path(args.math).read_text().splitlines() if line.strip()
         ]
         summary["math500"] = run_math(math_items, args.model, args.seed, out)
+    if args.tag:
+        summary["tag"] = args.tag
     summary["ended_at"] = datetime.now(UTC).isoformat()
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
