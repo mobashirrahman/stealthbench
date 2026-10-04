@@ -103,8 +103,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["T20"]
-# The CLI is the one module whose job is to write to stdout/stderr.
+# Scripts and the CLI are the modules whose job is to write to stdout/stderr.
 "src/stealthbench/cli.py" = ["T201"]
+"scripts/**" = ["T20"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["stealthbench"]
