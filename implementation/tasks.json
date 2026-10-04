@@ -222,7 +222,7 @@
       "id": "T03A",
       "title": "Fixture transport and endpoint capabilities",
       "gate": "G03",
-      "status": "todo",
+      "status": "done",
       "depends_on": [],
       "requires_gates": [
         "G02"
@@ -233,13 +233,19 @@
         "Fixture transport expresses errors, missing usage and unsupported settings through the frozen contract."
       ],
       "execution_mode": "offline",
-      "evidence": null
+      "evidence": {
+        "gate": "G03",
+        "source_revision": "afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f",
+        "record": "implementation/evidence/G03/afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f/gate.json",
+        "review": "pass (round 8)",
+        "note": "Independent review round 8 returned PASS. Round 8 found three demonstrated defects, all the known sibling-guard shape (fixture discovery raised on duplicate aliases while Zen deduped; fixture coerced boolean http_status and retry_after_seconds while Zen reads both strictly). All fixed with dedicated regression tests. Adapter layer 100% statement/branch; full 74-mutation harness passes on the final tree plus M75/M76 for the new guards."
+      }
     },
     {
       "id": "T03B",
       "title": "Zen catalog and chat adapter",
       "gate": "G03",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "T03A"
       ],
@@ -252,13 +258,19 @@
         "Catalog snapshots and normal/error/tool responses normalize without invented capabilities."
       ],
       "execution_mode": "offline",
-      "evidence": null
+      "evidence": {
+        "gate": "G03",
+        "source_revision": "afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f",
+        "record": "implementation/evidence/G03/afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f/gate.json",
+        "review": "pass (round 8)",
+        "note": "Independent review round 8 returned PASS. Round 8 found three demonstrated defects, all the known sibling-guard shape (fixture discovery raised on duplicate aliases while Zen deduped; fixture coerced boolean http_status and retry_after_seconds while Zen reads both strictly). All fixed with dedicated regression tests. Adapter layer 100% statement/branch; full 74-mutation harness passes on the final tree plus M75/M76 for the new guards."
+      }
     },
     {
       "id": "T03C",
       "title": "Streaming and reference route normalization",
       "gate": "G03",
-      "status": "todo",
+      "status": "done",
       "depends_on": [
         "T03B"
       ],
@@ -271,7 +283,13 @@
         "Split SSE records, Unicode, reasoning and terminal usage preserve content and correct timestamps; route labels stay distinct."
       ],
       "execution_mode": "offline",
-      "evidence": null
+      "evidence": {
+        "gate": "G03",
+        "source_revision": "afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f",
+        "record": "implementation/evidence/G03/afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f/gate.json",
+        "review": "pass (round 8)",
+        "note": "Independent review round 8 returned PASS. Round 8 found three demonstrated defects, all the known sibling-guard shape (fixture discovery raised on duplicate aliases while Zen deduped; fixture coerced boolean http_status and retry_after_seconds while Zen reads both strictly). All fixed with dedicated regression tests. Adapter layer 100% statement/branch; full 74-mutation harness passes on the final tree plus M75/M76 for the new guards."
+      }
     },
     {
       "id": "T04A",
@@ -1146,7 +1164,7 @@
     },
     {
       "id": "G03",
-      "status": "not_run",
+      "status": "passed",
       "requires_gates": [
         "G02"
       ],
@@ -1156,7 +1174,57 @@
         "T03C"
       ],
       "specification": "IMPLEMENTATION_PLAN.md",
-      "evidence": []
+      "evidence": [
+        {
+          "source_revision": "afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f",
+          "record": "implementation/evidence/G03/afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f/gate.json",
+          "review_decision": "PASS",
+          "commands": [
+            {
+              "command": "ruff check .",
+              "exit_status": 0
+            },
+            {
+              "command": "ruff format --check .",
+              "exit_status": 0
+            },
+            {
+              "command": "mypy src/stealthbench",
+              "exit_status": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/unit tests/contract -q",
+              "exit_status": 0,
+              "collected": 988,
+              "passed": 988,
+              "skipped": 0
+            },
+            {
+              "command": "pytest --strict-markers tests/integration tests/replay -q",
+              "exit_status": 0,
+              "collected": 127,
+              "passed": 127,
+              "skipped": 0
+            },
+            {
+              "command": "pytest --strict-markers -q",
+              "exit_status": 0,
+              "collected": 1118,
+              "passed": 1116,
+              "skipped": 2
+            },
+            {
+              "command": "stealthbench manifest validate configs/offline-demo.json",
+              "exit_status": 0
+            },
+            {
+              "command": "stealthbench run configs/offline-demo.json",
+              "exit_status": 3,
+              "expectation": "non-zero (offline dispatch loop lands in G05)"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "G04",
