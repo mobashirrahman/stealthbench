@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "StealthBench implementers" }]
+authors = [{ name = "Md Mobashir Rahman" }]
 keywords = ["benchmark", "evaluation", "llm", "agents", "reproducibility"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
@@ -40,7 +40,8 @@ dev = [
 stealthbench = "stealthbench.cli:main"
 
 [project.urls]
-Plan = "https://github.com/example/stealthbench/blob/main/IMPLEMENTATION_PLAN.md"
+Repository = "https://github.com/mobashirrahman/stealthbench"
+Plan = "https://github.com/mobashirrahman/stealthbench/blob/main/IMPLEMENTATION_PLAN.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stealthbench"]
