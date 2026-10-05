@@ -113,18 +113,30 @@ def math_prompt(item: dict) -> str:
     )
 
 
-def run_mmlu(items: list[dict], model: str, seed: int, out: Path, max_tokens: int = 64) -> dict:
+def run_mmlu(
+    items: list[dict],
+    model: str,
+    seed: int,
+    out: Path,
+    max_tokens: int = 64,
+    per_cat: int = 7,
+    limit: int | None = 100,
+) -> dict:
     by_cat: dict[str, list[dict]] = {}
     for it in items:
         by_cat.setdefault(it["category"], []).append(it)
     chosen: list[dict] = []
     for cat in sorted(by_cat):
-        chosen += sorted(by_cat[cat], key=lambda it: rank(str(it["question_id"]), seed))[:7]
-    rest = sorted(
-        (it for it in items if it not in chosen),
-        key=lambda it: rank(str(it["question_id"]), seed),
-    )
-    chosen += rest[: max(0, 100 - len(chosen))]
+        chosen += sorted(by_cat[cat], key=lambda it: rank(str(it["question_id"]), seed))[:per_cat]
+    if limit is not None and len(chosen) > limit:
+        order = {str(it["question_id"]): rank(str(it["question_id"]), seed) for it in chosen}
+        chosen = sorted(chosen, key=lambda it: order[str(it["question_id"])])[:limit]
+    elif limit is not None:
+        rest = sorted(
+            (it for it in items if it not in chosen),
+            key=lambda it: rank(str(it["question_id"]), seed),
+        )
+        chosen += rest[: max(0, limit - len(chosen))]
     (out / "mmlu_selection.json").write_text(
         json.dumps(
             {
@@ -138,8 +150,18 @@ def run_mmlu(items: list[dict], model: str, seed: int, out: Path, max_tokens: in
         + "\n"
     )
     correct = invalid = failed = 0
-    with (out / "mmlu_generations.jsonl").open("w") as f:
+    gen_path = out / "mmlu_generations.jsonl"
+    done: set[int] = set()
+    if gen_path.exists():
+        for line in gen_path.read_text().splitlines():
+            if line.strip():
+                done.add(json.loads(line)["question_id"])
+        if done:
+            print(f"resuming mmlu: {len(done)} done")
+    with gen_path.open("a") as f:
         for i, item in enumerate(chosen):
+            if item["question_id"] in done:
+                continue
             res = post(model, mmlu_prompt(item), max_tokens=max_tokens)
             entry: dict = {
                 "question_id": item["question_id"],
@@ -169,6 +191,17 @@ def run_mmlu(items: list[dict], model: str, seed: int, out: Path, max_tokens: in
                 f"[mmlu {i + 1}/{len(chosen)}] q={item['question_id']} ok={res['ok']}", flush=True
             )
             time.sleep(1)
+    correct = invalid = failed = 0
+    for line in gen_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        c = json.loads(line)["correct"]
+        if c is True:
+            correct += 1
+        elif c is False:
+            invalid += 1
+        else:
+            failed += 1
     graded = correct + invalid
     return {
         "requested": len(chosen),
@@ -180,8 +213,8 @@ def run_mmlu(items: list[dict], model: str, seed: int, out: Path, max_tokens: in
     }
 
 
-def run_math(items: list[dict], model: str, seed: int, out: Path) -> dict:
-    chosen = sorted(items, key=lambda it: rank(it["unique_id"], seed))[:100]
+def run_math(items: list[dict], model: str, seed: int, out: Path, n: int = 100) -> dict:
+    chosen = sorted(items, key=lambda it: rank(it["unique_id"], seed))[:n]
     (out / "math_selection.json").write_text(
         json.dumps(
             {"seed": seed, "n": len(chosen), "keys": [c["unique_id"] for c in chosen]}, indent=2
@@ -189,8 +222,18 @@ def run_math(items: list[dict], model: str, seed: int, out: Path) -> dict:
         + "\n"
     )
     correct = wrong = failed = 0
-    with (out / "math_generations.jsonl").open("w") as f:
+    math_path = out / "math_generations.jsonl"
+    done_ids: set[str] = set()
+    if math_path.exists():
+        for line in math_path.read_text().splitlines():
+            if line.strip():
+                done_ids.add(json.loads(line)["unique_id"])
+        if done_ids:
+            print(f"resuming math: {len(done_ids)} done")
+    with math_path.open("a") as f:
         for i, item in enumerate(chosen):
+            if item["unique_id"] in done_ids:
+                continue
             res = post(model, math_prompt(item), max_tokens=1024)
             entry: dict = {
                 "unique_id": item["unique_id"],
@@ -223,6 +266,17 @@ def run_math(items: list[dict], model: str, seed: int, out: Path) -> dict:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
             print(f"[math {i + 1}/{len(chosen)}] id={item['unique_id']} ok={res['ok']}", flush=True)
             time.sleep(1)
+    correct = wrong = failed = 0
+    for line in math_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        c = json.loads(line)["correct"]
+        if c is True:
+            correct += 1
+        elif c is False:
+            wrong += 1
+        else:
+            failed += 1
     graded = correct + wrong
     return {
         "requested": len(chosen),
@@ -243,6 +297,9 @@ def main() -> int:
     ap.add_argument("--output", required=True)
     ap.add_argument("--only", choices=["mmlu", "math"], default=None)
     ap.add_argument("--max-tokens-mmlu", type=int, default=64)
+    ap.add_argument("--n-math", type=int, default=100)
+    ap.add_argument("--n-mmlu-per-cat", type=int, default=7)
+    ap.add_argument("--mmlu-limit", type=int, default=100)
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
@@ -259,13 +316,21 @@ def main() -> int:
         mmlu_items = [
             json.loads(line) for line in Path(args.mmlu).read_text().splitlines() if line.strip()
         ]
-        summary["mmlu_pro"] = run_mmlu(mmlu_items, args.model, args.seed, out, args.max_tokens_mmlu)
+        summary["mmlu_pro"] = run_mmlu(
+            mmlu_items,
+            args.model,
+            args.seed,
+            out,
+            args.max_tokens_mmlu,
+            args.n_mmlu_per_cat,
+            args.mmlu_limit,
+        )
         summary["mmlu_pro"]["max_tokens"] = args.max_tokens_mmlu
     if args.only in (None, "math"):
         math_items = [
             json.loads(line) for line in Path(args.math).read_text().splitlines() if line.strip()
         ]
-        summary["math500"] = run_math(math_items, args.model, args.seed, out)
+        summary["math500"] = run_math(math_items, args.model, args.seed, out, args.n_math)
     if args.tag:
         summary["tag"] = args.tag
     summary["ended_at"] = datetime.now(UTC).isoformat()
