@@ -39,6 +39,12 @@
     "prompt_level_strict_accuracy": 0.547,
     "selection_seed": 20261004
   },
+  "scores_full": {
+    "n": 541,
+    "note": "entire official google/IFEval train split (541 prompts); same generation protocol as n=150 run",
+    "prompt_level_loose_accuracy": 0.584,
+    "prompt_level_strict_accuracy": 0.573
+  },
   "selection": "sha256(seed:key) rank-order, seed 20261004, 50 items",
   "transport": {
     "distinct_cost_values": [
