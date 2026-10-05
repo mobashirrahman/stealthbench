@@ -1,0 +1,135 @@
+{
+  "campaign": "live-bfcl-space-bunny-free-20261004",
+  "credentials_used": false,
+  "disclaimer": "50-case prompted-track slice; not comparable to published full-set leaderboard numbers; overall_accuracy is null by construction for a partial run.",
+  "model": "space-bunny-free",
+  "profile": "prompted",
+  "seed": 20261004,
+  "selection": {
+    "dataset_id": "gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+    "huggingface": {
+      "fetch": "plain https GET https://huggingface.co/api/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard, no auth",
+      "has_v4_files": false,
+      "note": "HF revision hosts only BFCL_v3_* files (52 siblings); no BFCL_v4_* per-category JSONL is published there, so V4 items were fetched from the pinned gorilla commit below",
+      "sha": "61fc0608cfd831fcfbbaa676ebdfef0ed963eeda",
+      "sibling_count": 52
+    },
+    "method": "sha256(seed:item_id) rank-order per category, seed 20261004",
+    "pinned_commit": "f7cf7359b7ac615a0b294831c5ba2bc95ee4a000",
+    "data_base": "https://raw.githubusercontent.com/ShishirPatil/gorilla/f7cf7359b7ac615a0b294831c5ba2bc95ee4a000/berkeley-function-call-leaderboard/bfcl_eval/data (plain https, no auth)",
+    "file_sha256": {
+      "simple_python": "82dd63ba502eb2520c6b5d1d9a5c4b590e03ff261565175561f6228a367d1991",
+      "simple_java": "13d2303a125b08754f0e41995b9273b5005fa8ed8ebfaa24ef53b4d83c4b5c6e",
+      "simple_javascript": "329e67fedf79a6243d93dbda4b388d12bd2d31f1f2163d92cb6ef676d1764f44",
+      "multiple": "aef168155ebd74b7ac2401198b201343bc7d16d7a3d7e0d4e6d8ee82c6969b2a",
+      "parallel": "19f51a82eff42e5d62541aa500115a056eb78f437c2ba1f10415fd7c8e5dda84",
+      "irrelevance": "2b6ed4c2e992cdcf5f1678a701851f944bef7550ee026ed1ddb89efed5be01a6"
+    },
+    "quotas": {
+      "simple_python": 9,
+      "simple_java": 8,
+      "simple_javascript": 8,
+      "multiple": 9,
+      "parallel": 8,
+      "irrelevance": 8
+    },
+    "n": 50,
+    "excluded": [
+      "live_simple/live_multiple/live_parallel/live_parallel_multiple/live_irrelevance/live_relevance (slice is non-live only)",
+      "agentic_web_search + memory (need SerpAPI credential and live network; unavailable, never zero)",
+      "multi_turn_* (needs multi-turn interaction, not a single bare user message)",
+      "format_sensitivity (non-scoring) and live_relevance (non-scoring)",
+      "restful/executable (retired upstream; never reported)"
+    ]
+  },
+  "generation": {
+    "system_prompt": null,
+    "prompt_form": "bare user message: prompted-track instruction + function specs JSON + user query (mirrors default classic/plaintext python/json instruction, sent as user content)",
+    "temperature": 0.0,
+    "max_tokens": 512,
+    "one_sample_per_task": true,
+    "transport": "stdlib urllib only",
+    "endpoint": "https://opencode.ai/zen/v1/chat/completions",
+    "sequential_1s_sleep": true,
+    "retries": "429/5xx only, max 3 attempts"
+  },
+  "grading": {
+    "adapter": "stealthbench.benchmarks.bfcl in prompted mode (grader bfcl-eval@f7cf7359b7ac615a0b294831c5ba2bc95ee4a000)",
+    "parser": "content-only python-format parse via stdlib ast ([func(args...)]); reasoning_content ignored; empty/unparsable output grades as no calls (irrelevance passes, anything else fails), never as missing",
+    "expected": "first concrete surface form per param from possible_answer ground_truth ('' means omit); strict Unicode-exact, type-exact match via the repo adapter",
+    "script": "scripts/live_bfcl_50.py"
+  },
+  "per_category": [
+    {
+      "category": "irrelevance",
+      "correct": 5,
+      "eligible": 8,
+      "planned": 8,
+      "accuracy": 0.625,
+      "status": "supported"
+    },
+    {
+      "category": "multiple",
+      "correct": 4,
+      "eligible": 9,
+      "planned": 9,
+      "accuracy": 0.4444444444444444,
+      "status": "supported"
+    },
+    {
+      "category": "parallel",
+      "correct": 7,
+      "eligible": 8,
+      "planned": 8,
+      "accuracy": 0.875,
+      "status": "supported"
+    },
+    {
+      "category": "simple_java",
+      "correct": 6,
+      "eligible": 8,
+      "planned": 8,
+      "accuracy": 0.75,
+      "status": "supported"
+    },
+    {
+      "category": "simple_javascript",
+      "correct": 4,
+      "eligible": 8,
+      "planned": 8,
+      "accuracy": 0.5,
+      "status": "supported"
+    },
+    {
+      "category": "simple_python",
+      "correct": 4,
+      "eligible": 9,
+      "planned": 9,
+      "accuracy": 0.4444444444444444,
+      "status": "supported"
+    }
+  ],
+  "scoring_correct": 30,
+  "scoring_eligible": 50,
+  "scoring_planned": 50,
+  "overall_accuracy": null,
+  "complete": false,
+  "transport": {
+    "requested": 50,
+    "ok": 50,
+    "failed": 0,
+    "distinct_cost_values": [
+      "0"
+    ]
+  },
+  "spend_usd": 0.0,
+  "raw_artifacts": "artifacts/live-bfcl-50/ (gitignored: selection.json, generations.jsonl, summary.json)",
+  "caveats": [
+    "Partial 50-case slice over 6 of 16 scoring categories; overall_accuracy is null and complete=false by the frozen adapter rule, never a zero-filled mean.",
+    "HF dataset revision 61fc0608cfd831fcfbbaa676ebdfef0ed963eeda carries only BFCL_v3_* files; V4 items came from the pinned gorilla commit f7cf7359 via plain https with per-file sha256 recorded in selection.",
+    "Strict repo-adapter oracle (exact Unicode, exact int/float/bool, missing-or-extra fails) vs lenient upstream AST checker (case/punctuation-insensitive strings, many allowed surface forms, '' = omit optional): expected uses the first concrete form, so reported accuracies are a lower bound, not leaderboard-comparable.",
+    "Bare single user message used instead of upstream system+user split; upstream eval temperature is 0.001 vs 0.0 here (both effectively greedy).",
+    "Content-only grading: reasoning_content ignored; 2 irrelevance cases returned empty content with finish_reason=length (512-token budget exhausted by 511 reasoning tokens) and graded as no calls (pass). max_tokens=512 truncates reasoning-heavy turns.",
+    "No SerpAPI key and no live network beyond the model endpoint, so agentic/web_search categories are unavailable (excluded, never zero); retired restful/executable never reported; live/multi-turn/format_sensitivity/memory excluded from this slice by design."
+  ]
+}

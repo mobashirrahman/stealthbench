@@ -1,7 +1,7 @@
 {
   "campaign": "live-ifeval-space-bunny-free-20261004",
   "ci_95_strict": "0.47-0.63 (SE 0.041)",
-  "dataset": "google/IFEval rev 966cd895, split train, n=50 of 541",
+  "dataset": "google/IFEval rev 966cd895, split train, n=150 of 541 (plus full-541 scores_full)",
   "disclaimer": "150-of-541 seeded subsample, temperature 0; not comparable to published full-set numbers; infrastructure-grade check, not a global ranking.",
   "free_model_probe_20261004": {
     "opencode_console_only_403": [
@@ -45,7 +45,7 @@
     "prompt_level_loose_accuracy": 0.584,
     "prompt_level_strict_accuracy": 0.573
   },
-  "selection": "sha256(seed:key) rank-order, seed 20261004, 50 items",
+  "selection": "sha256(seed:key) rank-order, seed 20261004, 150 items",
   "transport": {
     "distinct_cost_values": [
       "0"
