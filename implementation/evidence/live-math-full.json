@@ -1,0 +1,29 @@
+{
+  "accuracy": 0.61,
+  "campaign": "live-math-full-space-bunny-free",
+  "correct": 305,
+  "credentials_used": false,
+  "dataset": "HuggingFaceH4/MATH-500 rev 6e4ed1a2",
+  "disclaimer": "Full official split with prompted boxed-answer format; grader is repo frozen protocol (exact->numeric, symbolic unavailable).",
+  "generation": {
+    "boxed_instruction": true,
+    "max_tokens": 1024,
+    "one_sample_per_task": true,
+    "system_prompt": null,
+    "temperature": 0.0
+  },
+  "methods": {
+    "exact": 302,
+    "numeric_only": 3,
+    "symbolic": "unavailable (no sympy)"
+  },
+  "model": "space-bunny-free",
+  "n": 500,
+  "note": "Consistent with the 100-item run (0.57) within noise.",
+  "raw_artifacts": "artifacts/live-math-full/ (gitignored)",
+  "se": 0.022,
+  "seed": 20261004,
+  "seed_rank": true,
+  "spend_usd": 0.0,
+  "transport_failed": 0
+}
