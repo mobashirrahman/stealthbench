@@ -1,0 +1,48 @@
+{
+  "campaign": "live-suite-space-bunny-free-20261004",
+  "credentials_used": false,
+  "disclaimer": "100-item seeded subsamples; not comparable to published full-set numbers.",
+  "generation": {
+    "one_sample_per_task": true,
+    "system_prompt": null,
+    "temperature": 0.0
+  },
+  "math500": {
+    "accuracy": 0.57,
+    "correct": 57,
+    "correction": "an earlier 0.80 used symbolic_equals() truthiness (it returns a tuple); recomputed per frozen exact->numeric->symbolic protocol gives 0.57",
+    "dataset": "HuggingFaceH4/MATH-500 rev 6e4ed1a2",
+    "methods": {
+      "exact": 57,
+      "numeric_only": 0,
+      "symbolic": "unavailable (no sympy)"
+    },
+    "n": 100,
+    "seed_rank": true,
+    "transport_failed": 0
+  },
+  "mmlu_pro": {
+    "accuracy_content_only": 0.36,
+    "correct": 36,
+    "dataset": "TIGER-Lab/MMLU-Pro test rev b189ec76",
+    "invalid_or_wrong": 64,
+    "n": 100,
+    "note": "58 responses had empty message.content (answer confined to reasoning_content); reasoning-inclusive extraction also 0.36",
+    "stratified_14_categories": true,
+    "transport_failed": 0
+  },
+  "mmlu_pro_1024": {
+    "accuracy_content_only": 0.73,
+    "correct": 73,
+    "empty_content": 15,
+    "max_tokens": 1024,
+    "n": 100,
+    "note": "Same 100 items/prompts as the 0.36 run; only the output budget changed (64->1024). Reasoning traces complete and the answer letter lands in content.",
+    "same_selection": true,
+    "transport_failed": 0
+  },
+  "model": "space-bunny-free",
+  "raw_artifacts": "artifacts/live-suite-20261004/ (gitignored)",
+  "seed": 20261004,
+  "spend_usd": 0.0
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "offline-demo",
+  "title": "Offline fixture demonstration",
+  "description": "Small, fully offline demonstration campaign. Every generation is served from a recorded fixture transcript, so this profile carries no credentials and cannot spend money. Used by the routine CI workflow.",
+  "mode": "offline",
+  "materialized": true,
+  "score_version": "stealthbench-core-v1",
+  "seed": 20261002,
+  "observation_window": {
+    "started_at": null,
+    "ended_at": null,
+    "timezone": "UTC"
+  },
+  "endpoints": [
+    {
+      "endpoint_id": "fixture-anonymous-alpha",
+      "alias": "fixture-anonymous-alpha",
+      "route": "fixture",
+      "transport": "fixture",
+      "label_family": null,
+      "label_exact_version": null,
+      "label_tokenizer": null,
+      "label_provider": null,
+      "capabilities": {
+        "streaming": true,
+        "tool_calls": false,
+        "reasoning": false,
+        "usage_reporting": true,
+        "logprobs": false
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_per_mtok": null,
+        "output_per_mtok": null,
+        "cached_input_per_mtok": null,
+        "reasoning_per_mtok": null,
+        "snapshot_id": null
+      },
+      "credential_ref": null
+    }
+  ],
+  "benchmarks": [
+    {
+      "benchmark_id": "ifeval",
+      "track": "direct",
+      "adapter_version": "0.1.0",
+      "dataset_id": "synthetic-legal-v1",
+      "dataset_revision": "fixture-2026-10-02",
+      "evaluator_id": "instruction_following_eval",
+      "evaluator_revision": "google-research@e49bbfe381c9c0e564b937f1c4e163a2273c65cc",
+      "expected_item_count": 3,
+      "item_ids": [
+        "syn-if-001",
+        "syn-if-002",
+        "syn-if-003"
+      ],
+      "repeats": 1,
+      "scoring_protocol": {
+        "report_strict": true,
+        "report_loose": true
+      },
+      "category": "instruction_following"
+    }
+  ],
+  "generation": {
+    "max_output_tokens": 512,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "seed": 20261002,
+    "stream": false,
+    "unsupported_settings_are_errors": true
+  },
+  "retry_policy": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 1.0,
+    "multiplier": 2.0,
+    "max_backoff_seconds": 30.0,
+    "retryable_statuses": [
+      408,
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
+  },
+  "limits": {
+    "max_requests": 1000,
+    "max_concurrency": 4,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 200000,
+    "max_total_cost_usd": 1.0,
+    "max_wall_seconds": 900,
+    "require_cost_bounds": true
+  },
+  "budget_scope": "campaign"
+}

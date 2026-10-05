@@ -1,0 +1,176 @@
+{
+  "artifacts": [
+    "src/stealthbench/scheduler.py",
+    "src/stealthbench/costs.py",
+    "src/stealthbench/recovery.py",
+    "src/stealthbench/runner.py",
+    "tests/unit/test_scheduler.py",
+    "tests/unit/test_costs.py",
+    "tests/unit/test_recovery.py",
+    "tests/unit/test_runner.py",
+    "tests/contract/test_g04_gate.py"
+  ],
+  "collected": 1121,
+  "commands": [
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "51 files already formatted"
+      ]
+    },
+    {
+      "command": ".venv/bin/mypy src/stealthbench",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 19 source files"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 991,
+      "_skipped": 0,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/unit tests/contract",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "991 passed in 11.61s"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 127,
+      "_skipped": 0,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/integration tests/replay",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "127 passed in 10.24s"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 1119,
+      "_skipped": 2,
+      "command": ".venv/bin/python -m pytest --strict-markers -q",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "1119 passed, 2 skipped in 28.44s"
+      ]
+    },
+    {
+      "command": ".venv/bin/stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "valid offline-demo manifest"
+      ]
+    },
+    {
+      "command": ".venv/bin/stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "stderr_tail": [
+        "stealthbench: error: 'run' has no offline dispatch loop yet",
+        "{\"command\": \"run\", \"gate\": \"G05\", \"status\": \"not_implemented\"}"
+      ],
+      "stdout_tail": []
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/replay",
+    "tests/live"
+  ],
+  "defects_found_by_review": [
+    "run_campaign never enforced token caps or missingness on delivered results: any ACCEPTED delivery was appended and counted. Fixed: ledger.check_usage gates every result; a refused usage records a failure and ends the sample's attempts without counting an accepted sample.",
+    "dry_run=True validated nothing despite claiming to validate every input. Fixed: _validate_plan mirrors the real loop's pre-dispatch refusals (missing request, missing input bound, uncomputable cost bound, worst-case over remaining cap, plan over request cap) without touching the ledger.",
+    "Ledger.reserve with require_cost_bounds=False held zero even when the bound was computable, defeating concurrent cap accounting. Fixed: the worst case is held whenever computable; zero only when uncomputable and not required."
+  ],
+  "depends_on_gates": [
+    "G03"
+  ],
+  "exit_statuses": {
+    "cli_run": 3,
+    "cli_validate": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "g04_coverage": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_id": "G04",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 127,
+      "failed": 0,
+      "passed": 127,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 991,
+      "failed": 0,
+      "passed": 991,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "module_branch_coverage": {
+    "branches": 156,
+    "measure": "coverage run --branch --source=src/stealthbench over the G04 unit files plus the G04 gate test",
+    "missed_statements": 0,
+    "note": "All four G04 modules at 100% statement and branch coverage, including the review-fix code paths (usage-cap refusal, dry-run blockers, computable-bound reservation, price-change settlement notes).",
+    "partial_branches": 0,
+    "percent": 100,
+    "statements": 678
+  },
+  "passed": 1119,
+  "passed_gate": true,
+  "prerequisite_evidence": [
+    "implementation/evidence/G03/afed273da18a324de68bb5987819e44a6fc19551cb104c6f5f0c88688d35784f/gate.json"
+  ],
+  "recorded_on": "2026-10-04",
+  "required_tasks": [
+    "T04A",
+    "T04B",
+    "T04C",
+    "T04D"
+  ],
+  "review_decision": "PASS (independent G04 review plus re-verification of all three fixes)",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "047e1c5b3de6789c324e51cb9a10710d4725387d71845f029a6e5c505d9c1f9d",
+    "kind": "source_tree_sha256",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d\" \" -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 703,
+    "tests/integration": 100,
+    "tests/live": 3,
+    "tests/replay": 27,
+    "tests/sandbox": 0,
+    "tests/unit": 288
+  },
+  "vacuous_suites": {
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07)"
+  }
+}

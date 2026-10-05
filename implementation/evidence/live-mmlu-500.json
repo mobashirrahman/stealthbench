@@ -1,0 +1,39 @@
+{
+  "accuracy_content_only": 0.712,
+  "by_category": {
+    "biology": "31/36",
+    "business": "28/36",
+    "chemistry": "29/36",
+    "computer science": "28/36",
+    "economics": "23/36",
+    "engineering": "23/36",
+    "health": "25/36",
+    "history": "20/32",
+    "law": "14/36",
+    "math": "32/36",
+    "other": "22/36",
+    "philosophy": "25/36",
+    "physics": "29/36",
+    "psychology": "27/36"
+  },
+  "campaign": "live-mmlu-500-space-bunny-free",
+  "correct": 356,
+  "credentials_used": false,
+  "dataset": "TIGER-Lab/MMLU-Pro test rev b189ec76",
+  "disclaimer": "Stratified subsample with zero-shot letter-only prompts; not comparable to published 5-shot CoT full-set numbers.",
+  "generation": {
+    "one_sample_per_task": true,
+    "system_prompt": null,
+    "temperature": 0.0
+  },
+  "max_tokens": 1024,
+  "model": "space-bunny-free",
+  "n": 500,
+  "note": "Consistent with the 100-item 1024-token rerun (0.73); law weakest at 0.39.",
+  "raw_artifacts": "artifacts/live-mmlu-500/ (gitignored)",
+  "se": 0.02,
+  "seed": 20261004,
+  "spend_usd": 0.0,
+  "stratified_14_categories": true,
+  "transport_failed": 0
+}

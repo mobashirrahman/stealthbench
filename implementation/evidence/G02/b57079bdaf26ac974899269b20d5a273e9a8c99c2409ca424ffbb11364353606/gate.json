@@ -1,0 +1,280 @@
+{
+  "artifacts": [
+    "src/stealthbench/storage/events.py",
+    "src/stealthbench/storage/index.py",
+    "src/stealthbench/storage/replay.py"
+  ],
+  "collected": 418,
+  "commands": [
+    {
+      "command": "ruff check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "lint",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": "ruff format --check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "format",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "33 files already formatted"
+      ]
+    },
+    {
+      "command": "mypy src/stealthbench",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "typecheck",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 11 source files"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "unit_contract",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        ".......................                                                  [100%]",
+        "311 passed in 11.67s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/integration tests/replay -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "integration_replay",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "................................                                         [100%]",
+        "104 passed in 9.28s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "full_offline_collection",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "SKIPPED [2] tests/live/test_live_authorization.py:30: blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+        "416 passed, 2 skipped in 20.49s"
+      ]
+    },
+    {
+      "command": "stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_validate",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": "stealthbench bogus-command",
+      "exit_status": 2,
+      "expectation": "non-zero exit",
+      "name": "cli_invalid_command",
+      "satisfied": true,
+      "stderr_tail": [
+        "usage: stealthbench [-h] [--version] <command> ...",
+        "stealthbench: error: argument <command>: invalid choice: 'bogus-command' (choose from 'version', 'manifest', 'run', 'replay', 'report', 'signatures', 'identify', 'doctor')"
+      ],
+      "stdout_tail": []
+    },
+    {
+      "command": "stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "expectation": "non-zero exit",
+      "name": "cli_run_pending",
+      "satisfied": true,
+      "stderr_tail": [
+        "{\"command\": \"run\", \"gate\": \"G04\", \"status\": \"not_implemented\"}"
+      ],
+      "stdout_tail": []
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/replay",
+    "tests/live"
+  ],
+  "depends_on_gates": [
+    "G01"
+  ],
+  "environment": {
+    "dependency_lock": "constraints-dev.txt",
+    "platform": "linux",
+    "python": "3.12.3",
+    "sqlite": "stdlib, in-memory and on-disk per operation",
+    "tool_versions": {
+      "httpx": "0.28.1",
+      "mypy": "1.18.2",
+      "pydantic": "2.12.5",
+      "pytest": "9.1.1",
+      "ruff": "0.15.1"
+    },
+    "venv": ".venv"
+  },
+  "exit_statuses": {
+    "cli_invalid_command": 2,
+    "cli_run_pending": 3,
+    "cli_validate": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_criteria": [
+    {
+      "criterion": "interrupted writes cannot invent completed samples",
+      "evidence": "A truncated final line, an unparsable line, a schema-invalid line, a missing payload and a tampered payload are each reported as Damage and withheld from the event stream. tests/integration/test_storage_recovery.py produces the crash scenario by actually SIGKILLing a writer subprocess mid-append and asserts every surviving completion event still has a verifiable payload. The durability ordering (payload fsync+atomic rename before the event line is appended) is asserted directly.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "redacted exports contain no canary secrets",
+      "evidence": "Redaction happens before the payload is written, so the log itself is clean. Recognizable canaries (sk-, ghp_, AIza, AKIA, JWT, PEM, 'api_key=' forms) and environment-sourced secrets are replaced with [REDACTED]. Credential-named headers are always redacted regardless of content. test_g02_gate.py asserts no canary survives the events file, the JSON export or the CSV export. Redaction is proven idempotent and proven not to damage hashes, versions or counts. CSV cells starting = + - @ are defused.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "replaying saved generations does not contact a provider",
+      "evidence": "ReplayReader is constructed from paths only and exposes no client, transport, session or credential attribute. The module imports no http/requests/socket/urllib, asserted by AST inspection in two tests. Replay is exercised with credentials set and the autouse socket guard active. Strict replay refuses to reconstruct from a damaged store rather than returning a partial result.",
+      "result": "satisfied"
+    }
+  ],
+  "gate_id": "G02",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 104,
+      "failed": 0,
+      "passed": 104,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 311,
+      "failed": 0,
+      "passed": 311,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "mutation_checks": [
+    {
+      "detected_by": [
+        "tests/replay/test_replay_reader.py::test_strict_replay_refuses_a_damaged_store",
+        "tests/replay/test_replay_reader.py::test_lenient_replay_reports_damage_instead",
+        "tests/contract/test_g02_gate.py"
+      ],
+      "failures_observed": 5,
+      "mutation": "truncation detection disabled (a partial final line accepted as intact)"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_a_tampered_payload_is_detected",
+        "tests/integration/test_storage_recovery.py::test_a_missing_payload_is_reported_and_the_event_withheld"
+      ],
+      "failures_observed": 4,
+      "mutation": "payload hash verification skipped on read"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_redaction.py::test_ingest_is_idempotent",
+        "tests/integration/test_redaction.py::test_ingest_twice_does_not_double_count_samples"
+      ],
+      "failures_observed": 2,
+      "mutation": "index ingestion made non-idempotent (plain INSERT, no replace)"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_a_canary_in_a_provider_error_is_redacted_at_write_time",
+        "tests/integration/test_storage_recovery.py::test_secrets_from_the_environment_are_caught_even_unrecognised"
+      ],
+      "failures_observed": 4,
+      "mutation": "redaction skipped at write time"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_g02_gate.py::test_strict_replay_refuses_corrupt_provenance",
+        "tests/replay/test_replay_reader.py::test_strict_replay_refuses_a_damaged_store"
+      ],
+      "failures_observed": 2,
+      "mutation": "strict replay tolerates corrupt provenance"
+    }
+  ],
+  "not_established_by_this_gate": [
+    "No generation has been dispatched; `run` still exits 3 pending G04.",
+    "The offline-demo campaign still cannot run end to end: it needs a fixture transport from G03 (T03A) and a scheduler from G04.",
+    "No official benchmark grader has been wrapped yet; grading here uses a test double to prove determinism only.",
+    "No dataset, evaluator or provider has been contacted.",
+    "Live readiness, setup, pilot and full-run gates remain blocked_external."
+  ],
+  "passed": 416,
+  "prerequisite_evidence": [
+    "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json"
+  ],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T02A",
+    "T02B",
+    "T02C"
+  ],
+  "review_decision": "PENDING",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py::test_live_suite_requires_explicit_authorization": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+    "tests/live/test_live_authorization.py::test_paid_suite_requires_a_numeric_spending_cap": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "b57079bdaf26ac974899269b20d5a273e9a8c99c2409ca424ffbb11364353606",
+    "kind": "source_tree_sha256",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d' ' -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 177,
+    "tests/integration": 81,
+    "tests/live": 3,
+    "tests/replay": 23,
+    "tests/sandbox": 0,
+    "tests/unit": 134
+  },
+  "task_acceptance": {
+    "T02A": {
+      "evidence": "Interrupted writes, partial final JSONL records, duplicate ingestion, mismatched hashes, event ordering, credential-bearing headers and errors, and recognizable canaries are all covered in tests/integration/test_storage_recovery.py (39 tests).",
+      "result": "satisfied"
+    },
+    "T02B": {
+      "evidence": "Idempotent ingestion proven by re-running ingest five times; headers, error bodies and both exports proven canary-free; CSV formula injection defused for all four leading characters; absent usage exported as empty/None, never 0.",
+      "result": "satisfied"
+    },
+    "T02C": {
+      "evidence": "tests/replay/test_replay_reader.py reconstructs stored generations, refuses corrupt provenance in strict mode, reports it in lenient mode, and regrades deterministically (identical grade digest across reads, and a different digest for a different grader).",
+      "result": "satisfied"
+    }
+  },
+  "vacuous_suites": {
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07). tests/replay was registered as vacuous through G01 and is no longer: it collected 0 at G01 and 23 at G02."
+  }
+}

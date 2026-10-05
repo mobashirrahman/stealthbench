@@ -1,0 +1,2015 @@
+"""Zen catalog and chat adapter (task T03B).
+
+Acceptance: catalog snapshots and normal/error/tool responses normalize without
+invented capabilities.
+
+Every alias here is a fixture name, deliberately not a real stealth alias: the point
+of these tests is that the adapter learns the alias set from the snapshot, so a test
+that hardcoded a real one would prove nothing.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from stealthbench.adapters.base import FailureKind
+from stealthbench.adapters.zen import (
+    ZEN_BASE_URL,
+    ZEN_CATALOG_PATH,
+    ZEN_CHAT_PATH,
+    ZenAdapter,
+    catalog_snapshot_digest,
+    effective_settings_of,
+    extract_text,
+    extract_tool_calls,
+    finish_reason_of,
+    map_finish_reason,
+    map_http_status,
+    normalize_catalog,
+    usage_from_response,
+)
+from stealthbench.schemas.results import DeliveryStatus, ModelRequest, SampleKey, Usage
+
+pytestmark = pytest.mark.contract
+
+CANARY = "sk-canary-zen-0123456789abcdef"
+PROMPT_HASH = "a" * 64
+
+
+def key(
+    alias_task: str = "ifeval::item-1", repeat: int = 1, endpoint: str = "alias-a"
+) -> SampleKey:
+    return SampleKey(campaign_id="c1", endpoint_id=endpoint, task_id=alias_task, repeat_id=repeat)
+
+
+def request_(**overrides: object) -> ModelRequest:
+    payload: dict[str, object] = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_output_tokens": 64,
+    }
+    payload.update(overrides)
+    return ModelRequest.model_validate(payload)
+
+
+def chat_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": "chatcmpl-123",
+        "model": "alias-a",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello there"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 9, "completion_tokens": 4},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def adapter(**overrides: object) -> ZenAdapter:
+    # The adapter is bound to one endpoint, so an endpoint-unqualified transcript key
+    # is unambiguous rather than a capture replayed for every alias.
+    payload: dict[str, object] = {
+        "catalog_payload": {"data": []},
+        "exchanges": {},
+        "endpoint_id": "alias-a",
+    }
+    payload.update(overrides)
+    return ZenAdapter(**payload)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Catalog snapshots
+# ---------------------------------------------------------------------------
+
+
+def test_an_openai_shaped_catalog_is_normalized() -> None:
+    snapshot = normalize_catalog(
+        {
+            "object": "list",
+            "data": [
+                {
+                    "id": "alias-a",
+                    "display_name": "Alias A",
+                    "owned_by": "some-provider",
+                    "family": "some-family",
+                    "context_window": 200000,
+                    "capabilities": {
+                        "streaming": True,
+                        "tool_calls": False,
+                        "usage_reporting": True,
+                    },
+                }
+            ],
+        }
+    )
+    assert snapshot.aliases() == ("alias-a",)
+    entry = snapshot.get("alias-a")
+    assert entry is not None
+    assert entry.provider == "some-provider"
+    assert entry.family == "some-family"
+    assert entry.capabilities.streaming is True
+    assert entry.capabilities.tool_calls is False
+
+
+def test_a_bare_list_catalog_is_accepted() -> None:
+    snapshot = normalize_catalog([{"id": "alias-b"}])
+    assert snapshot.aliases() == ("alias-b",)
+
+
+def test_a_models_keyed_catalog_is_accepted() -> None:
+    snapshot = normalize_catalog({"models": [{"alias": "alias-c"}]})
+    assert snapshot.aliases() == ("alias-c",)
+
+
+def test_an_empty_catalog_is_empty_not_invented() -> None:
+    for payload in ({}, {"data": []}, [], None, "nonsense", 42):
+        snapshot = normalize_catalog(payload)
+        assert snapshot.is_empty, f"{payload!r} should yield an empty snapshot"
+
+
+def test_capabilities_are_never_inferred_from_absence() -> None:
+    """A catalog that says nothing about streaming must not be treated as streaming."""
+    snapshot = normalize_catalog({"data": [{"id": "quiet"}]})
+    entry = snapshot.get("quiet")
+    assert entry is not None
+    assert entry.capabilities.streaming is False
+    assert entry.capabilities.tool_calls is False
+    assert entry.capabilities.reasoning is False
+    assert entry.capabilities.usage_reporting is False
+    assert entry.capabilities.logprobs is False
+
+
+def test_a_non_boolean_capability_value_does_not_become_true() -> None:
+    snapshot = normalize_catalog({"data": [{"id": "odd", "capabilities": {"streaming": "yes"}}]})
+    entry = snapshot.get("odd")
+    assert entry is not None
+    assert entry.capabilities.streaming is False
+
+
+def test_a_malformed_entry_is_skipped_and_others_survive() -> None:
+    snapshot = normalize_catalog({"data": [{"id": "good"}, {"nope": 1}, None, "string", {"id": 7}]})
+    assert snapshot.aliases() == ("good",)
+
+
+def test_duplicate_aliases_keep_the_first_occurrence() -> None:
+    snapshot = normalize_catalog(
+        {
+            "data": [
+                {"id": "dup", "display_name": "First"},
+                {"id": "dup", "display_name": "Second"},
+            ]
+        }
+    )
+    assert snapshot.aliases() == ("dup",)
+    entry = snapshot.get("dup")
+    assert entry is not None
+    assert entry.display_name == "First"
+
+
+def test_the_snapshot_is_digested_for_provenance() -> None:
+    first = normalize_catalog({"data": [{"id": "a"}]})
+    again = normalize_catalog({"data": [{"id": "a"}]})
+    other = normalize_catalog({"data": [{"id": "a"}, {"id": "b"}]})
+    assert catalog_snapshot_digest(first) == catalog_snapshot_digest(again)
+    assert catalog_snapshot_digest(first) != catalog_snapshot_digest(other)
+
+
+def test_the_source_is_recorded() -> None:
+    assert normalize_catalog({"data": []}, source="custom").source == "custom"
+    assert normalize_catalog({"data": []}).source == ZEN_BASE_URL
+
+
+def test_the_documented_paths_are_recorded() -> None:
+    """Provenance: the endpoints this adapter targets are documented, never dialled."""
+    assert ZEN_CATALOG_PATH == "/v1/models"
+    assert ZEN_CHAT_PATH == "/v1/chat/completions"
+    assert ZEN_BASE_URL.startswith("https://")
+
+
+def test_discover_returns_the_recorded_catalog() -> None:
+    instance = adapter(catalog_payload={"data": [{"id": "alias-x"}]})
+    assert instance.discover().aliases() == ("alias-x",)
+
+
+def test_discover_without_a_capture_is_empty() -> None:
+    instance = ZenAdapter()
+    assert instance.discover().is_empty
+
+
+def test_no_stealth_alias_is_hardcoded() -> None:
+    """The alias set must come from the catalog, not from this source file."""
+    source = Path(__file__).resolve().parents[2] / "src" / "stealthbench" / "adapters" / "zen.py"
+    text = source.read_text(encoding="utf-8").lower()
+    for alias in ("big-pickle", "space-bunny"):
+        assert alias not in text, f"{alias} is hardcoded in the adapter"
+
+
+# ---------------------------------------------------------------------------
+# Normal responses
+# ---------------------------------------------------------------------------
+
+
+def test_a_normal_response_is_normalized() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}})
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "hello there"
+    assert outcome.result.usage.input_tokens == 9
+    assert outcome.result.usage.output_tokens == 4
+    assert outcome.result.finish_status == "stop"
+    assert outcome.result.delivery_status is DeliveryStatus.ACCEPTED
+
+
+def test_the_reported_model_is_kept_separate_from_the_endpoint() -> None:
+    """A gateway may serve a different model than the alias names."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {"http_status": 200, "json": chat_payload(model="something-else")}
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None
+    assert outcome.result.sample_key.endpoint_id == "alias-a"
+    assert outcome.result.redacted_provider_metadata["reported_model"] == "something-else"
+
+
+def test_request_id_is_recorded_for_provenance() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}})
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None
+    assert outcome.result.redacted_provider_metadata["request_id"] == "chatcmpl-123"
+
+
+def test_effective_settings_separate_requested_from_reported() -> None:
+    payload = chat_payload(stealthbench_effective={"temperature": 0.9})
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}})
+    outcome = instance.complete(
+        sample_key=key(), request=request_(temperature=0.0), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.result is not None
+    effective = outcome.result.effective_settings
+    assert effective["requested"]["temperature"] == 0.0
+    assert effective["reported"]["temperature"] == 0.9, (
+        "what the endpoint did must not be conflated with what we asked for"
+    )
+
+
+def test_requested_and_reported_settings_are_always_both_present() -> None:
+    effective = effective_settings_of({}, request_(temperature=0.3))
+    assert "requested" in effective
+    assert "reported" not in effective, "nothing reported means nothing claimed"
+
+
+# ---------------------------------------------------------------------------
+# Usage normalisation
+# ---------------------------------------------------------------------------
+
+
+def test_openai_style_usage_keys_are_read() -> None:
+    usage = usage_from_response({"usage": {"prompt_tokens": 5, "completion_tokens": 7}})
+    assert usage.input_tokens == 5
+    assert usage.output_tokens == 7
+    assert usage.is_complete
+
+
+def test_anthropic_style_usage_keys_are_read() -> None:
+    usage = usage_from_response({"usage": {"input_tokens": 5, "output_tokens": 7}})
+    assert usage.input_tokens == 5
+    assert usage.output_tokens == 7
+
+
+def test_absent_usage_stays_null() -> None:
+    usage = usage_from_response({"choices": []})
+    assert usage.input_tokens is None
+    assert usage.output_tokens is None
+    assert usage.provider_reported is False
+
+
+def test_partially_reported_usage_keeps_the_gap() -> None:
+    usage = usage_from_response({"usage": {"prompt_tokens": 5}})
+    assert usage.input_tokens == 5
+    assert usage.output_tokens is None
+    assert not usage.is_complete
+
+
+def test_a_reported_zero_survives() -> None:
+    usage = usage_from_response({"usage": {"prompt_tokens": 0, "completion_tokens": 0}})
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+    assert usage != Usage()
+    assert usage.provider_reported is True
+
+
+def test_cached_and_reasoning_tokens_are_read_when_present() -> None:
+    usage = usage_from_response(
+        {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 60,
+                "reasoning_tokens": 8,
+            }
+        }
+    )
+    assert usage.cached_input_tokens == 60
+    assert usage.reasoning_tokens == 8
+
+
+def test_usage_at_the_top_level_is_read() -> None:
+    usage = usage_from_response({"input_tokens": 3, "output_tokens": 4})
+    assert usage.input_tokens == 3
+    assert usage.output_tokens == 4
+
+
+def test_a_negative_or_boolean_token_value_is_ignored() -> None:
+    usage = usage_from_response({"usage": {"prompt_tokens": -5, "completion_tokens": True}})
+    assert usage.input_tokens is None
+    assert usage.output_tokens is None
+
+
+# ---------------------------------------------------------------------------
+# Error responses
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [
+        (401, FailureKind.AUTHENTICATION),
+        (403, FailureKind.PERMISSION),
+        (404, FailureKind.NOT_FOUND),
+        (429, FailureKind.RATE_LIMIT),
+        (500, FailureKind.SERVER_ERROR),
+        (503, FailureKind.SERVER_ERROR),
+        (408, FailureKind.TIMEOUT),
+        (302, FailureKind.PROTOCOL),
+    ],
+)
+def test_http_statuses_map_to_failure_kinds(status: int, kind: FailureKind) -> None:
+    assert map_http_status(status) is kind
+
+
+@pytest.mark.parametrize("status", [200, 201, 204, None])
+def test_success_statuses_map_to_no_failure(status: int | None) -> None:
+    assert map_http_status(status) is None
+
+
+def test_an_authentication_failure_is_reported_with_its_error_message() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 401,
+                "body": {"error": {"message": "invalid api key"}},
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.AUTHENTICATION
+    assert outcome.failure.detail == "invalid api key"
+    assert not outcome.failure.retryable
+    assert outcome.result is None
+
+
+def test_a_rate_limit_carries_retry_after() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": "7"},
+                "body": {"error": "slow down"},
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.RATE_LIMIT
+    assert outcome.failure.retry_after_seconds == 7.0
+    assert outcome.failure.retryable
+
+
+def test_an_error_body_containing_a_credential_is_redacted() -> None:
+    instance = adapter(
+        catalog_payload={"data": []},
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 401,
+                "body": {"error": {"message": f"bad key {CANARY}", "key": CANARY}},
+            }
+        },
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+
+
+def test_a_response_without_content_or_tool_calls_is_a_protocol_error() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": {"id": "x", "choices": [{"message": {}}]},
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
+
+
+def test_an_exchange_with_no_json_body_is_a_protocol_error() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200}})
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.PROTOCOL
+
+
+def test_an_unrecorded_exchange_is_reported_not_invented() -> None:
+    outcome = adapter().complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.NO_FIXTURE
+
+
+# ---------------------------------------------------------------------------
+# Tool responses
+# ---------------------------------------------------------------------------
+
+
+def test_a_tool_call_response_is_normalized() -> None:
+    payload = chat_payload(
+        choices=[
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city":"Oslo"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        usage={"prompt_tokens": 20, "completion_tokens": 8},
+    )
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}})
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.finish_status == "tool_calls"
+    calls = outcome.result.redacted_provider_metadata["tool_calls"]
+    assert calls[0]["function"]["name"] == "get_weather"
+
+
+def test_a_tool_call_with_no_text_is_still_accepted() -> None:
+    """A tool call is a valid completion even when the text content is empty."""
+    payload = chat_payload(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "c", "type": "function", "function": {"name": "f"}}],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    )
+    outcome = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}}).complete(
+        sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.ok
+
+
+def test_no_tool_calls_reports_an_empty_tuple_not_none() -> None:
+    payload = chat_payload()
+    assert extract_tool_calls(payload) == ()
+    outcome = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}}).complete(
+        sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.result is not None
+    assert outcome.result.redacted_provider_metadata["tool_calls"] == []
+
+
+# ---------------------------------------------------------------------------
+# Finish reasons
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("stop", "stop"),
+        ("STOP", "stop"),
+        ("length", "length"),
+        ("tool_calls", "tool_calls"),
+        ("function_call", "tool_calls"),
+        ("content_filter", "content_filter"),
+        ("something_new", "error"),
+    ],
+)
+def test_finish_reasons_map_to_the_frozen_vocabulary(reason: str, expected: str) -> None:
+    assert map_finish_reason(reason) == expected
+
+
+def test_an_unrecognised_finish_reason_is_never_mapped_to_stop() -> None:
+    """A truncated generation must not be counted as a clean stop."""
+    assert map_finish_reason("weird") != "stop"
+
+
+def test_an_absent_finish_reason_stays_absent() -> None:
+    """No reason is not a stop. The gateway said nothing; the record must too.
+
+    This case previously asserted ``None -> "stop"``, which is how a truncated
+    generation gets counted as a completed answer.
+    """
+    assert map_finish_reason(None) is None
+    assert finish_reason_of({"choices": [{"delta": {}, "finish_reason": None}]}) is None
+    assert finish_reason_of({"choices": [{}]}) is None
+
+
+def test_a_missing_choices_array_is_an_error_not_a_stop() -> None:
+    assert finish_reason_of({"choices": []}) == "error"
+    assert finish_reason_of({}) == "error"
+
+
+# ---------------------------------------------------------------------------
+# Text extraction shapes
+# ---------------------------------------------------------------------------
+
+
+def test_content_parts_are_concatenated() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "part one "},
+                        {"type": "text", "text": "two"},
+                    ],
+                }
+            }
+        ]
+    }
+    assert extract_text(payload) == "part one two"
+
+
+def test_absent_content_is_none_not_an_empty_string() -> None:
+    """Absent and empty are different facts."""
+    assert extract_text({"choices": [{"message": {}}]}) is None
+    assert extract_text({"choices": [{"message": {"content": ""}}]}) == ""
+    assert extract_text({"choices": []}) is None
+    assert extract_text({}) is None
+
+
+# ---------------------------------------------------------------------------
+# Loading from disk
+# ---------------------------------------------------------------------------
+
+
+def test_an_adapter_is_loaded_from_a_transcript_file(tmp_path: Path) -> None:
+    path = tmp_path / "zen.json"
+    path.write_text(
+        json.dumps(
+            {
+                "catalog": {"data": [{"id": "alias-disk"}]},
+                "exchanges": {"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    instance = ZenAdapter.from_path(path)
+    assert instance.discover().aliases() == ("alias-disk",)
+    # The capture names one alias, so the unqualified exchange binds to that alias.
+    outcome = instance.complete(
+        sample_key=key(endpoint="alias-disk"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.ok
+    # And to no other: a different endpoint was never dispatched.
+    other = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert not other.ok, "the capture must not answer for an alias it never named"
+
+
+def test_a_transcript_file_must_be_an_object(tmp_path: Path) -> None:
+    path = tmp_path / "zen.json"
+    path.write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        ZenAdapter.from_path(path)
+
+
+def test_repeats_are_selectable_in_a_transcript() -> None:
+    """The repeat must select a different recorded generation, not the first one."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1#r1": {"http_status": 200, "json": chat_payload()},
+            "ifeval::item-1#r2": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": "second"}, "finish_reason": "stop"}]
+                ),
+            },
+        }
+    )
+    first = instance.complete(sample_key=key(repeat=1), request=request_(), prompt_hash=PROMPT_HASH)
+    second = instance.complete(
+        sample_key=key(repeat=2), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert first.result is not None and first.result.response == "hello there"
+    assert second.result is not None and second.result.response == "second"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the G03 review findings
+# ---------------------------------------------------------------------------
+
+
+def test_a_repeat_specific_record_beats_a_generic_one() -> None:
+    """Defect: the repeat-less key was yielded first, so every repeat replayed one response."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": "GENERIC"}, "finish_reason": "stop"}]
+                ),
+            },
+            "ifeval::item-1#r2": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": "REPEAT-2"}, "finish_reason": "stop"}]
+                ),
+            },
+        }
+    )
+    request = request_()
+    responses = {
+        repeat: instance.complete(
+            sample_key=key(repeat=repeat), request=request, prompt_hash=PROMPT_HASH
+        ).result.response
+        for repeat in (1, 2, 3)
+    }
+    assert responses == {1: "GENERIC", 2: "REPEAT-2", 3: "GENERIC"}
+
+
+def test_every_repeat_gets_its_own_record_when_each_is_recorded() -> None:
+    instance = adapter(
+        exchanges={
+            f"ifeval::item-1#r{repeat}": {
+                "http_status": 200,
+                "json": chat_payload(
+                    choices=[{"message": {"content": f"r{repeat}"}, "finish_reason": "stop"}]
+                ),
+            }
+            for repeat in (1, 2, 3)
+        }
+    )
+    request = request_()
+    responses = [
+        instance.complete(
+            sample_key=key(repeat=repeat), request=request, prompt_hash=PROMPT_HASH
+        ).result.response
+        for repeat in (1, 2, 3)
+    ]
+    assert responses == ["r1", "r2", "r3"]
+
+
+@pytest.mark.parametrize("raw", ["false", "no", 1, "yes", 0])
+def test_a_non_boolean_capability_is_never_reported_as_supported(raw: object) -> None:
+    snapshot = normalize_catalog({"data": [{"id": "odd", "capabilities": {"streaming": raw}}]})
+    entry = snapshot.get("odd")
+    assert entry is not None
+    assert entry.capabilities.streaming is False
+
+
+def test_a_credential_in_effective_settings_is_redacted() -> None:
+    """Defect: Zen effective_settings bypassed redact_mapping while its metadata did not."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(stealthbench_effective={"debug": CANARY}),
+            }
+        },
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+
+
+def test_a_credential_in_a_zen_tool_call_is_redacted() -> None:
+    payload = chat_payload(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": f'{{"k":"{CANARY}"}}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    )
+    instance = adapter(
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}},
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+
+
+def test_a_credential_in_a_zen_catalog_raw_record_is_redacted() -> None:
+    snapshot = ZenAdapter(
+        catalog_payload={"data": [{"id": "m", "note": CANARY}]},
+        extra_secrets=frozenset({CANARY}),
+    ).discover()
+    assert CANARY not in json.dumps(dict(snapshot.raw))
+    assert CANARY not in json.dumps([e.model_dump(mode="json") for e in snapshot.entries])
+
+
+def test_the_zen_adapter_can_stream_and_labels_its_own_route() -> None:
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "hello "}}]},
+                    {"choices": [{"delta": {"content": "world"}, "finish_reason": "stop"}]},
+                    {"choices": [], "usage": {"input_tokens": 3, "output_tokens": 2}},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.ok
+    assert outcome.result is not None
+    assert outcome.result.response == "hello world"
+    assert outcome.result.usage.output_tokens == 2
+    assert outcome.result.redacted_provider_metadata["route"] == "zen"
+
+
+def test_streaming_an_exchange_without_frames_is_reported() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}})
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
+
+
+def test_a_credential_in_the_reported_model_name_is_redacted() -> None:
+    """A gateway can echo the credential back inside the model field."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(model=f"alias-a-{CANARY}"),
+            }
+        },
+        extra_secrets=frozenset({CANARY}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert CANARY not in json.dumps(outcome.to_dict())
+    assert outcome.result is not None
+    assert CANARY not in str(outcome.result.redacted_provider_metadata.get("reported_model"))
+
+
+# ---------------------------------------------------------------------------
+# The declared-secret path must be exercised on its own
+#
+# An `sk-...` shaped canary is defused by the built-in credential patterns whether
+# or not the adapter passes its declared secrets through, so it cannot prove the
+# declared-secrets wiring. BLIND is shaped so that only an explicitly declared
+# secret can remove it.
+# ---------------------------------------------------------------------------
+
+BLIND = "ZZQdeclared-canary-7f3a2b9c4d1e"
+
+
+def test_the_declared_secret_path_is_wired_into_effective_settings() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(
+                    model=f"alias-{BLIND}", stealthbench_effective={"debug": BLIND}
+                ),
+            }
+        },
+        extra_secrets=frozenset({BLIND}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_the_declared_secret_path_is_wired_into_tool_calls() -> None:
+    payload = chat_payload(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": f'{{"k":"{BLIND}"}}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    )
+    instance = adapter(
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}},
+        extra_secrets=frozenset({BLIND}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_the_declared_secret_path_is_wired_into_the_catalog_snapshot() -> None:
+    snapshot = ZenAdapter(
+        catalog_payload={"data": [{"id": "m", "note": BLIND}]},
+        extra_secrets=frozenset({BLIND}),
+    ).discover()
+    assert BLIND not in json.dumps(dict(snapshot.raw))
+    assert BLIND not in json.dumps([e.model_dump(mode="json") for e in snapshot.entries])
+
+
+def test_the_declared_secret_path_is_wired_into_a_failure_body() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 500,
+                "body": {"error": {"message": f"upstream rejected {BLIND}"}},
+            }
+        },
+        extra_secrets=frozenset({BLIND}),
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert BLIND not in json.dumps(outcome.to_dict())
+
+
+def test_a_declared_secret_that_matches_no_pattern_is_still_visible_if_undeclared() -> None:
+    """The control: without declaring it, the value survives, so the tests above bite."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(stealthbench_effective={"debug": BLIND}),
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert BLIND in json.dumps(outcome.to_dict()), "an undeclared opaque value stays as-is"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the second G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_a_capture_without_the_sentinel_is_not_replayed_as_complete() -> None:
+    """CRITICAL: the Zen stream path appended `data: [DONE]` unconditionally."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_terminated": False,
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "truncated mid-"}}]},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.INTERRUPTED
+
+
+def test_a_declared_secret_reaches_no_part_of_a_zen_streamed_failure() -> None:
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"error": {"message": f"gateway rejected {blind}"}}],
+            }
+        },
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert blind not in outcome.failure.detail
+    assert blind not in json.dumps(outcome.to_dict())
+
+
+def test_recorded_unsupported_settings_are_reported_on_the_zen_route() -> None:
+    """MAJOR: the Zen route could only ever report the `stream` setting."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["temperature", "top_p"],
+            }
+        }
+    )
+    outcome = instance.complete(
+        sample_key=key(),
+        request=request_(temperature=0.7, top_p=0.5),
+        prompt_hash=PROMPT_HASH,
+    )
+    assert sorted(item.setting for item in outcome.unsupported) == ["temperature", "top_p"]
+    reported = {item.setting: item.requested for item in outcome.unsupported}
+    assert reported["temperature"] == 0.7
+    assert reported["top_p"] == 0.5
+
+
+def test_recorded_unsupported_settings_are_reported_when_streaming() -> None:
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "unsupported_settings": ["top_p"],
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(top_p=0.5),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert [item.setting for item in outcome.unsupported] == ["top_p"]
+
+
+def test_an_unqualified_transcript_key_is_refused_when_several_aliases_exist() -> None:
+    """MAJOR: one capture was replayed as a sample for every endpoint in the campaign."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}, {"id": "alias-b"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    for endpoint in ("alias-a", "alias-b", "alias-c"):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint),
+            request=request_(),
+            prompt_hash=PROMPT_HASH,
+        )
+        assert not outcome.ok, f"{endpoint} must not inherit another endpoint's capture"
+        assert outcome.failure is not None
+        assert outcome.failure.kind is FailureKind.NO_FIXTURE
+
+
+def test_an_unqualified_transcript_key_is_used_when_the_capture_has_one_alias() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+
+
+def test_an_endpoint_qualified_key_is_used_regardless_of_alias_count() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}, {"id": "alias-b"}]},
+        exchanges={"alias-a:ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    mine = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    theirs = instance.complete(
+        sample_key=key(endpoint="alias-b"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert mine.ok
+    assert not theirs.ok
+
+
+def test_a_catalog_request_with_a_query_string_is_still_recognised() -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    catalog = _catalog_from_requests(
+        [
+            {
+                "method": "GET",
+                "path": "/v1/models?limit=100",
+                "status": 200,
+                "body": {"data": [{"id": "m"}]},
+            }
+        ]
+    )
+    assert catalog == {"data": [{"id": "m"}]}
+
+
+@pytest.mark.parametrize("status", [500, 401, True, "200", 302])
+def test_only_a_real_2xx_catalog_response_is_accepted(status: object) -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    catalog = _catalog_from_requests(
+        [{"method": "GET", "path": "/v1/models", "status": status, "body": {"data": [{"id": "m"}]}}]
+    )
+    assert catalog is None
+
+
+def test_a_boolean_context_window_is_not_a_measurement_on_the_zen_route() -> None:
+    snapshot = normalize_catalog({"data": [{"id": "m", "context_window": True}]})
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.context_window is None
+
+
+@pytest.mark.parametrize("route", [None, "", "   "])
+def test_a_missing_route_label_does_not_become_the_string_none(route: object) -> None:
+    snapshot = normalize_catalog({"data": [{"id": "m", "route": route}]})
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.route == "zen", f"{route!r} must fall back, not stringify"
+
+
+def test_an_explicit_route_label_survives_on_the_zen_route() -> None:
+    snapshot = normalize_catalog({"data": [{"id": "m", "route": "eu-west"}]})
+    entry = snapshot.get("m")
+    assert entry is not None
+    assert entry.route == "eu-west"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the third G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_an_unqualified_key_is_refused_for_a_slug_keyed_catalog() -> None:
+    """The ambiguity guard counted `id` only, while the snapshot reads id/alias/slug."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"slug": "alias-a"}, {"slug": "alias-b"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    for endpoint in ("alias-a", "alias-b"):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint), request=request_(), prompt_hash=PROMPT_HASH
+        )
+        assert not outcome.ok, f"{endpoint} inherited another endpoint's capture"
+
+
+def test_an_unqualified_key_is_refused_for_an_alias_keyed_catalog() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"alias": "alias-a"}, {"alias": "alias-b"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    outcome = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert not outcome.ok
+
+
+def test_an_unqualified_key_is_refused_when_the_capture_has_no_catalog() -> None:
+    """No catalog is no evidence of which endpoint answered, which is maximal ambiguity."""
+    instance = ZenAdapter(
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}}
+    )
+    for endpoint in ("alias-a", "alias-b"):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint), request=request_(), prompt_hash=PROMPT_HASH
+        )
+        assert not outcome.ok, endpoint
+
+
+def test_an_unqualified_key_is_bound_to_the_endpoint_the_adapter_was_built_for() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}})
+    mine = instance.complete(
+        sample_key=key(endpoint="alias-a"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    theirs = instance.complete(
+        sample_key=key(endpoint="alias-b"), request=request_(), prompt_hash=PROMPT_HASH
+    )
+    assert mine.ok
+    assert not theirs.ok, "a capture bound to alias-a must not answer for alias-b"
+
+
+def test_a_single_alias_catalog_needs_no_binding() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    assert instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH).ok
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [
+        [None],
+        ["junk"],
+        [{}],
+        [{}, {}],
+        [None, None],
+    ],
+    ids=["none", "string", "empty-dict", "two-empty-dicts", "two-nones"],
+)
+def test_a_capture_with_no_usable_frames_is_refused(frames: list[object]) -> None:
+    """Only the sentinel survives, and accepting that invents a sample with no answer."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {"http_status": 200, "stream_frames": frames},
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+    # Every refusal branch in this method satisfies the assertions above; the kind is
+    # what distinguishes "the frames were unusable" from a missing capture, a declined
+    # setting or a cut stream.
+    assert outcome.failure.kind is FailureKind.PROTOCOL, outcome.failure.detail
+    assert "no usable frames" in outcome.failure.detail
+
+
+def test_recorded_unsupported_stream_reports_what_was_actually_requested() -> None:
+    """The report said `stream: False` on the very call that asked for a stream."""
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "unsupported_settings": ["stream", "seed"],
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(stream=True, seed=1234),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    reported = {item.setting: item.requested for item in outcome.unsupported}
+    assert reported["stream"] is True, "the request did ask for a stream"
+    assert reported["seed"] == 1234, "the seed the request carried must not be lost"
+
+
+def test_recorded_unsupported_complete_reports_what_was_actually_requested() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["seed"],
+            }
+        }
+    )
+    outcome = instance.complete(
+        sample_key=key(), request=request_(seed=99), prompt_hash=PROMPT_HASH
+    )
+    assert [item.requested for item in outcome.unsupported] == [99]
+
+
+@pytest.mark.parametrize(
+    ("raw", "terminated"),
+    [
+        (True, True),
+        (1, True),
+        (1.0, True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
+        (False, False),
+        (0, False),
+        (0.0, False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+        ("", False),
+        (None, False),
+        ("maybe", False),
+        ([], False),
+    ],
+)
+def test_both_adapters_read_the_sentinel_flag_identically(raw: object, terminated: bool) -> None:
+    """One shared reader, so the same capture cannot get opposite verdicts."""
+    from stealthbench.adapters.base import read_terminated
+    from stealthbench.adapters.zen import _was_terminated
+
+    assert _was_terminated(raw) is terminated
+    assert read_terminated(raw) is terminated
+
+
+def test_an_absent_terminated_field_means_the_capture_was_complete() -> None:
+    """The default is an ordinary complete capture, matching the fixture schema."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    assert "stream_terminated" not in instance._exchanges["ifeval::item-1"]
+    assert instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH).ok
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the fourth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_a_single_alias_catalog_binds_only_to_that_alias() -> None:
+    """Counting one alias was not enough: an unrelated endpoint must not match."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "only-alias"}]},
+        exchanges={"ifeval::item-1": {"http_status": 200, "json": chat_payload()}},
+    )
+    assert instance.complete(
+        sample_key=key(endpoint="only-alias"), request=request_(), prompt_hash=PROMPT_HASH
+    ).ok
+    for endpoint in ("alias-a", "unrelated", ""):
+        outcome = instance.complete(
+            sample_key=key(endpoint=endpoint), request=request_(), prompt_hash=PROMPT_HASH
+        )
+        assert not outcome.ok, f"{endpoint!r} must not inherit the capture"
+
+
+def test_a_usage_only_capture_with_no_counts_is_refused() -> None:
+    """`usage: {}` is a block, not a measurement, and cannot authorise a sample."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {"http_status": 200, "stream_frames": [{"usage": {}}]},
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+
+
+def test_a_capture_with_real_token_counts_is_still_accepted_when_streaming() -> None:
+    """The control for the test above: reported counts are content."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "x"}}]},
+                    {"choices": [], "usage": {"input_tokens": 2, "output_tokens": 1}},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.ok
+    assert outcome.result is not None
+
+
+def test_a_bare_string_of_unsupported_settings_is_not_one_setting_per_character() -> None:
+    """A string is not a list of names; iterating it would invent four settings."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": "seed",
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(seed=5), prompt_hash=PROMPT_HASH)
+    assert outcome.unsupported == (), "a malformed record reports nothing rather than guessing"
+
+
+def test_a_list_of_unsupported_settings_is_still_reported() -> None:
+    """The control: a well-formed list is honoured."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["seed", "top_p"],
+            }
+        }
+    )
+    outcome = instance.complete(
+        sample_key=key(), request=request_(seed=5, top_p=0.5), prompt_hash=PROMPT_HASH
+    )
+    assert [item.setting for item in outcome.unsupported] == ["seed", "top_p"]
+
+
+def test_both_adapters_read_an_alias_under_the_same_keys() -> None:
+    """The two normalizers used different vocabularies for the same payload."""
+    from stealthbench.adapters.base import FixtureBundle, FixtureTransport
+    from stealthbench.schemas.campaign import Capabilities
+
+    for key in ("id", "alias", "slug", "name"):
+        payload = {"data": [{"id": "m1"}, {"id": "m2"}]}
+        payload["data"] = [{key: "m1"}, {key: "m2"}]
+        zen_aliases = ZenAdapter(catalog_payload=payload).discover().aliases()
+        caps = Capabilities(
+            streaming=False,
+            tool_calls=False,
+            reasoning=False,
+            usage_reporting=False,
+            logprobs=False,
+        )
+        fixture = FixtureTransport(
+            FixtureBundle.model_validate(
+                {"name": "m", "capabilities": caps.model_dump(), "catalog": payload}
+            )
+        )
+        assert zen_aliases == fixture.discover().aliases(), key
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the fifth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_an_unqualified_repeat_pinned_key_is_refused_when_ambiguous() -> None:
+    """HIGH: the `#r<n>` key names no endpoint either, so the same guard applies.
+
+    One capture under `bench::item-1#r1` was replayed as an accepted sample for every
+    endpoint in the campaign.
+    """
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}, {"id": "alias-b"}, {"id": "alias-c"}]},
+        exchanges={
+            "bench::item-1#r1": {"http_status": 200, "json": chat_payload()},
+        },
+    )
+    # The key really is there: a matching endpoint-unqualified record would answer.
+    assert "bench::item-1#r1" in instance._exchanges
+    accepted = [
+        endpoint
+        for endpoint in ("alias-a", "alias-b", "alias-c")
+        if instance.complete(
+            sample_key=key("bench::item-1", endpoint=endpoint),
+            request=request_(),
+            prompt_hash=PROMPT_HASH,
+        ).ok
+    ]
+    assert accepted == [], f"one capture became samples for {accepted}"
+
+
+def test_an_unqualified_repeat_pinned_key_is_used_when_bound() -> None:
+    """The control: a bound adapter replays its own repeat-pinned capture."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1#r2": {"http_status": 200, "json": chat_payload()},
+        }
+    )
+    assert instance.complete(
+        sample_key=key(endpoint="alias-a", repeat=2), request=request_(), prompt_hash=PROMPT_HASH
+    ).ok
+
+
+def test_a_recorded_failure_is_never_replayed_as_a_streamed_sample() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "outcome": "error",
+                "failure_kind": "server_error",
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "PARTIAL"}}]},
+                    {"choices": [], "usage": {"input_tokens": 11, "output_tokens": 7}},
+                ],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok
+    assert outcome.result is None
+    assert outcome.failure is not None
+
+
+def test_the_streaming_path_keeps_the_recorded_retry_hint() -> None:
+    """The scheduler needs the retry delay the capture recorded."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": "7"},
+                "body": {"error": {"message": "slow down"}},
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.RATE_LIMIT
+    assert outcome.failure.retry_after_seconds == 7.0
+
+
+def test_the_streaming_path_keeps_the_recorded_unsupported_settings() -> None:
+    """A refusal must still say what the endpoint declined."""
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": "3"},
+                "unsupported_settings": ["seed"],
+                "body": {"error": {"message": "slow down"}},
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(seed=7),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.failure is not None
+    assert [item.setting for item in outcome.unsupported] == ["seed"]
+    assert outcome.unsupported[0].requested == 7
+
+
+def test_a_declared_secret_in_a_reported_setting_is_redacted() -> None:
+    blind = "ZZQdeclared-canary-7f3a2b9c4d1e"
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["stop"],
+            }
+        },
+        extra_secrets=frozenset({blind}),
+    )
+    outcome = instance.complete(
+        sample_key=key(), request=request_(stop=(blind,)), prompt_hash=PROMPT_HASH
+    )
+    assert blind not in json.dumps(outcome.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the sixth G03 review
+# ---------------------------------------------------------------------------
+
+
+def test_complete_honours_a_recorded_failure_the_streaming_path_refuses() -> None:
+    """The two paths must not return opposite verdicts on the same record."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "outcome": "error",
+                "failure_kind": "rate_limit",
+                "error_message": "no tokens were served",
+                "json": chat_payload(),
+                "stream_frames": [
+                    {"choices": [{"delta": {"content": "partial"}, "finish_reason": "stop"}]}
+                ],
+            }
+        }
+    )
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    streamed = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert completed.failure is not None
+    assert streamed.failure is not None
+    assert completed.failure.kind == streamed.failure.kind
+    assert completed.result is None and streamed.result is None
+
+
+def test_the_streaming_refusal_keeps_the_reported_unsupported_settings() -> None:
+    """Every refusal branch reports what the endpoint declined, including this one."""
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=False, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "unsupported_settings": ["top_p"],
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(top_p=0.5),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
+    assert "top_p" in [item.setting for item in outcome.unsupported]
+    assert {item.setting: item.requested for item in outcome.unsupported}["top_p"] == 0.5
+
+
+def test_a_boolean_http_status_is_not_read_as_a_status() -> None:
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": True, "json": chat_payload()}})
+    for outcome in (
+        instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH),
+        instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH),
+    ):
+        if outcome.failure is not None:
+            assert outcome.failure.http_status is None, "a bool is not an HTTP status"
+
+
+def test_a_zero_retry_after_is_read_as_a_value() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 429,
+                "headers": {"retry-after": 0},
+                "body": {"error": {"message": "slow down"}},
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.retry_after_seconds == 0.0, "0 is a reported value, not an absence"
+
+
+def test_a_no_fixture_detail_is_redacted_on_the_zen_routes() -> None:
+    blind = "ZZdeclaredEndpointSecret77"
+    instance = adapter(extra_secrets=frozenset({blind}))
+    request = request_()
+    for outcome in (
+        instance.complete(
+            sample_key=key(f"ifeval::{blind}"), request=request, prompt_hash=PROMPT_HASH
+        ),
+        instance.stream(
+            sample_key=key(f"ifeval::{blind}"), request=request, prompt_hash=PROMPT_HASH
+        ),
+    ):
+        assert outcome.failure is not None
+        assert blind not in outcome.failure.detail
+
+
+def test_the_no_frames_refusal_keeps_the_reported_unsupported_settings() -> None:
+    """Every refusal branch reports what the endpoint declined, including this one."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(),
+                "unsupported_settings": ["seed"],
+            }
+        }
+    )
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=False, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    outcome = instance.stream(
+        sample_key=key(),
+        request=request_(seed=3),
+        prompt_hash=PROMPT_HASH,
+        capabilities=caps,
+    )
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.UNSUPPORTED_SETTING
+    assert [item.setting for item in outcome.unsupported] == ["seed"]
+    assert outcome.unsupported[0].requested == 3
+
+
+# ---------------------------------------------------------------------------
+# Coverage of extraction and lookup paths no earlier test exercised
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({"choices": [{"message": "not-a-mapping"}]}, "no message object"),
+        ({"choices": [{"message": {"content": 7}}]}, "non-string content"),
+        ({"choices": [{"message": {"content": [{"type": "image"}]}}]}, "no text parts"),
+        ({"choices": [{"message": {"content": None}}]}, "null content"),
+    ],
+    ids=["no-message", "number-content", "no-text-parts", "null-content"],
+)
+def test_a_response_with_no_usable_text_is_refused_rather_than_accepted_empty(
+    payload: dict[str, object], reason: str
+) -> None:
+    """An answer that cannot be read is not an empty answer."""
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}})
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok, reason
+    assert outcome.result is None, reason
+    assert outcome.failure is not None
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({"choices": "not-a-list"}, "choices not a list"),
+        ({"choices": []}, "no choices"),
+        ({"choices": ["not-a-mapping"]}, "choice not a mapping"),
+        ({"choices": [{"message": {"role": "assistant"}}]}, "no tool_calls key"),
+        ({"choices": [{"message": {"tool_calls": "nope"}}]}, "tool_calls not a list"),
+    ],
+)
+def test_tool_call_extraction_returns_nothing_rather_than_guessing(
+    payload: dict[str, object], reason: str
+) -> None:
+    from stealthbench.adapters.zen import extract_tool_calls
+
+    assert extract_tool_calls(payload) == (), reason
+
+
+def test_a_choice_that_is_not_a_mapping_is_a_protocol_error_not_a_stop() -> None:
+    from stealthbench.adapters.zen import finish_reason_of
+
+    assert finish_reason_of({"choices": ["not-a-mapping"]}) == "error"
+    assert finish_reason_of({}) == "error"
+
+
+def test_a_failure_kind_this_vocabulary_does_not_define_maps_to_a_server_error() -> None:
+    """An unknown recorded kind is still reported, never silently dropped."""
+    from stealthbench.adapters.zen import _mapped_failure_kind
+
+    assert _mapped_failure_kind("rate_limit") is FailureKind.RATE_LIMIT
+    assert _mapped_failure_kind("meteor_strike") is FailureKind.SERVER_ERROR
+    assert _mapped_failure_kind(None) is None
+    assert _mapped_failure_kind(7) is None
+
+
+def test_an_unknown_recorded_failure_kind_is_still_reported() -> None:
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "outcome": "error",
+                "failure_kind": "meteor_strike",
+                "error_message": "something the vocabulary does not define",
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.failure is not None
+    assert outcome.failure.kind is FailureKind.SERVER_ERROR
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"method": "POST", "path": "/v1/chat/completions", "body": {"data": []}}, "wrong method"),
+        ({"path": "/v1/models/ft:gpt", "status": 200, "body": {"data": []}}, "a model sub-path"),
+        ({"path": 7, "status": 200, "body": {"data": []}}, "a non-string path"),
+        ("not-a-mapping", "an entry that is not a mapping"),
+    ],
+)
+def test_catalog_requests_that_are_not_the_catalog_request_are_skipped(
+    entry: object, expected: str
+) -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    assert _catalog_from_requests([entry]) is None, expected
+
+
+def test_a_catalog_response_without_a_json_body_is_not_an_empty_catalog() -> None:
+    from stealthbench.adapters.zen import _catalog_from_requests
+
+    assert _catalog_from_requests([{"path": "/v1/models", "status": 200}]) is None
+    assert _catalog_from_requests([{"path": "/v1/models", "status": 200, "body": "text"}]) is None
+    assert _catalog_from_requests("not-a-list") is None
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"detail": "explicit detail"}, "explicit detail"),
+        ({"error_message": "recorded message"}, "recorded message"),
+        ({"body": {"error": {"message": "nested message"}}}, "nested message"),
+        ({"body": {"error": "flat message"}}, "flat message"),
+        ({"body": {"error": {"code": "no-message-key"}}}, "recorded failure"),
+        ({"body": "not-a-mapping"}, "recorded failure"),
+        ({}, "recorded failure"),
+    ],
+    ids=[
+        "detail",
+        "error_message",
+        "nested",
+        "flat",
+        "no-message-key",
+        "body-not-a-mapping",
+        "empty",
+    ],
+)
+def test_a_failure_detail_is_read_from_whichever_shape_the_capture_used(
+    record: dict[str, object], expected: str
+) -> None:
+    from stealthbench.adapters.zen import _detail_of
+
+    assert _detail_of(record) == expected
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"headers": {"retry-after": "5"}}, 5.0),
+        ({"headers": {"Retry-After": "6"}}, 6.0),
+        ({"headers": {"retry-after": "0"}}, 0.0),
+        ({"headers": {"retry-after": 9}}, 9.0),
+        ({"headers": {"retry-after": "not-a-number"}}, None),
+        ({"headers": {"retry-after": True}}, None),
+        ({"headers": "not-a-mapping"}, None),
+        ({"headers": {}}, None),
+        ("not-a-mapping", None),
+        ({}, None),
+    ],
+    ids=[
+        "lower",
+        "capitalised",
+        "zero-is-a-value",
+        "numeric",
+        "not-a-number",
+        "boolean",
+        "headers-not-a-mapping",
+        "no-header",
+        "record-not-a-mapping",
+        "no-headers-key",
+    ],
+)
+def test_a_retry_after_is_read_from_whichever_shape_the_capture_used(
+    record: object, expected: float | None
+) -> None:
+    from stealthbench.adapters.zen import _retry_after
+
+    assert _retry_after(record) == expected
+
+
+def test_a_catalog_record_that_is_not_a_mapping_is_skipped() -> None:
+    snapshot = normalize_catalog({"data": ["not-a-mapping", {"id": "real"}]})
+    assert snapshot.aliases() == ("real",)
+
+
+def test_a_catalog_that_is_not_a_mapping_yields_an_empty_snapshot() -> None:
+    from stealthbench.adapters.zen import normalize_catalog
+
+    assert normalize_catalog("not-a-mapping").aliases() == ()
+    assert normalize_catalog({"data": "not-a-list"}).aliases() == ()
+
+
+def test_the_bundle_capabilities_accessor_returns_what_the_bundle_declared() -> None:
+    from stealthbench.adapters.base import FixtureBundle, FixtureTransport
+    from stealthbench.schemas.campaign import Capabilities
+
+    caps = Capabilities(
+        streaming=True, tool_calls=True, reasoning=False, usage_reporting=False, logprobs=False
+    )
+    transport = FixtureTransport(
+        FixtureBundle.model_validate({"name": "c", "capabilities": caps.model_dump()})
+    )
+    assert transport.capabilities() == caps
+
+
+# ---------------------------------------------------------------------------
+# The last uncovered paths, so no branch is exercised only by accident
+# ---------------------------------------------------------------------------
+
+
+def test_a_choice_that_is_not_a_mapping_yields_no_text() -> None:
+    from stealthbench.adapters.zen import extract_text
+
+    assert extract_text({"choices": ["not-a-mapping"]}) is None
+
+
+@pytest.mark.parametrize("bad", [True, -1, "5", 3.5])
+def test_a_junk_token_count_in_a_live_response_stays_absent(bad: object) -> None:
+    """The same coercion guard the fixture route uses, on the gateway route."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": chat_payload(usage={"prompt_tokens": bad, "completion_tokens": 4}),
+            }
+        }
+    )
+    outcome = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert outcome.result is not None
+    assert outcome.result.usage.input_tokens is None, f"{bad!r} is not a token count"
+    assert outcome.result.usage.output_tokens == 4
+
+
+def test_a_captured_failure_record_that_is_not_a_mapping_is_still_reported() -> None:
+    """A malformed capture yields a reported absence, never an exception."""
+    instance = ZenAdapter(endpoint_id="alias-a", exchanges={"ifeval::item-1": "not-a-mapping"})
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    streamed = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert completed.failure is not None
+    assert streamed.failure is not None
+
+
+def test_usage_reported_beside_the_choice_is_still_read() -> None:
+    """The top-level fallback, and a boolean there is skipped rather than read as 1."""
+    from stealthbench.adapters.zen import usage_from_response
+
+    top_level = usage_from_response(
+        {"input_tokens": 5, "output_tokens": 2, "choices": [{"message": {"content": "x"}}]}
+    )
+    assert top_level.input_tokens == 5
+    assert top_level.output_tokens == 2
+
+    junk = usage_from_response(
+        {"input_tokens": True, "output_tokens": "3", "choices": [{"message": {"content": "x"}}]}
+    )
+    assert junk.input_tokens is None, "a bool is not one token"
+    assert junk.output_tokens is None, "a numeric string is not a token count"
+
+
+def test_a_detail_reader_given_a_non_mapping_returns_the_generic_detail() -> None:
+    """Defence in depth: the record lookup already rejects one, but the reader is public."""
+    from stealthbench.adapters.zen import _detail_of
+
+    assert _detail_of("not-a-mapping") == "recorded failure"
+    assert _detail_of(None) == "recorded failure"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the seventh G03 review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reason", [5, True, 1.5, [], {}, 0, -1, object()])
+def test_a_non_string_finish_reason_does_not_raise_out_of_the_adapter(
+    reason: object,
+) -> None:
+    """CRITICAL: `reason.lower()` on a non-string raised from complete().
+
+    The streamed path already refused to guess; the two routes disagreed on the same
+    capture, and one of them died.
+    """
+    payload = chat_payload(
+        choices=[{"message": {"role": "assistant", "content": "hi"}, "finish_reason": reason}]
+    )
+    instance = adapter(exchanges={"ifeval::item-1": {"http_status": 200, "json": payload}})
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert completed.ok, f"{reason!r} must not raise"
+    assert completed.result is not None
+    assert completed.result.finish_status is None, f"{reason!r} is not a finish reason"
+
+
+def test_a_non_string_finish_reason_in_a_stream_reports_the_same_thing() -> None:
+    payload = json.dumps(
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": 5}]}, ensure_ascii=False
+    )
+    body = f"data: {payload}\n\n".encode() + b"data: [DONE]\n\n"
+    from stealthbench.adapters.streaming import parse_stream
+
+    streamed, _ = parse_stream([body], sample_key=key(), route="zen")
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "json": {"choices": [{"message": {"content": "hi"}, "finish_reason": 5}]},
+            }
+        }
+    )
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert streamed.ok and completed.ok
+    assert streamed.result is not None and completed.result is not None
+    assert streamed.result.finish_status == completed.result.finish_status is None
+
+
+def test_an_unknown_recorded_failure_kind_does_not_raise_on_the_streaming_path() -> None:
+    """CRITICAL: the streamed path constructed FailureKind from the capture directly."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "outcome": "error",
+                "failure_kind": "meteor_strike",
+                "error_message": "a kind this vocabulary does not define",
+                "stream_frames": [{"choices": [{"delta": {"content": "partial"}}]}],
+            }
+        }
+    )
+    streamed = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    completed = instance.complete(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert streamed.failure is not None
+    assert completed.failure is not None
+    assert streamed.failure.kind is completed.failure.kind is FailureKind.SERVER_ERROR
+    assert "does not define" in streamed.failure.detail
+
+
+def test_a_stream_is_never_reported_as_unsupported_when_the_catalog_advertises_it() -> None:
+    """MAJOR: the adapter claimed a catalog it never read does not offer streaming."""
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a", "capabilities": {"streaming": True}}]},
+        endpoint_id="alias-a",
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        },
+    )
+    assert instance.discover().get("alias-a").capabilities.streaming is True
+    outcome = instance.stream(
+        sample_key=key(), request=request_(stream=True), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.ok
+    assert "stream" not in [item.setting for item in outcome.unsupported], (
+        "the discovered catalog advertises streaming"
+    )
+
+
+def test_streaming_is_reported_unsupported_when_the_discovered_catalog_omits_it() -> None:
+    instance = ZenAdapter(
+        catalog_payload={"data": [{"id": "alias-a"}]},
+        endpoint_id="alias-a",
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        },
+    )
+    outcome = instance.stream(
+        sample_key=key(), request=request_(stream=True), prompt_hash=PROMPT_HASH
+    )
+    assert [item.setting for item in outcome.unsupported] == ["stream"]
+    assert outcome.unsupported[0].requested is True
+
+
+def test_nothing_is_claimed_about_a_catalog_that_was_never_recorded() -> None:
+    """No catalog evidence is not a negative observation."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(
+        sample_key=key(), request=request_(stream=True), prompt_hash=PROMPT_HASH
+    )
+    assert outcome.ok
+    assert outcome.unsupported == (), "an absent catalog supports no claim either way"
+
+
+@pytest.mark.parametrize("status", [-1, 0.5, float("nan"), float("inf"), 2.5])
+def test_a_sentinel_flag_that_is_not_a_sane_number_is_not_completion(
+    status: float,
+) -> None:
+    """Defence in depth: only a real boolean or a documented spelling counts."""
+    instance = adapter(
+        exchanges={
+            "ifeval::item-1": {
+                "http_status": 200,
+                "stream_terminated": status,
+                "stream_frames": [{"choices": [{"delta": {"content": "x"}}]}],
+            }
+        }
+    )
+    outcome = instance.stream(sample_key=key(), request=request_(), prompt_hash=PROMPT_HASH)
+    assert not outcome.ok, f"{status!r} is not a statement that the stream completed"
+
+
+def test_a_discovered_snapshot_is_cached_and_reused() -> None:
+    """Two calls must see one observation, not a freshly rebuilt one."""
+    instance = adapter(catalog_payload={"data": [{"id": "alias-a"}]})
+    first = instance.discover()
+    second = instance.discover()
+    assert first is second
+    assert first.digest() == second.digest()

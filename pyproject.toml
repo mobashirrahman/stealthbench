@@ -1,0 +1,125 @@
+[build-system]
+requires = ["hatchling==1.28.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stealthbench"
+version = "0.1.0"
+description = "Benchmark and identity-estimation harness for anonymous OpenCode Zen endpoints."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "StealthBench implementers" }]
+keywords = ["benchmark", "evaluation", "llm", "agents", "reproducibility"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Frozen toolchain for G00. Runtime dependencies are deliberately small; the
+# official benchmark graders are separate environments (see docs/upstream-inventory.md).
+dependencies = [
+  "httpx==0.28.1",
+  "pydantic==2.12.5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "hypothesis==6.142.1",
+  "ruff==0.15.1",
+  "mypy==1.18.2",
+]
+
+[project.scripts]
+stealthbench = "stealthbench.cli:main"
+
+[project.urls]
+Plan = "https://github.com/example/stealthbench/blob/main/IMPLEMENTATION_PLAN.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stealthbench"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/configs",
+  "/docs",
+  "/implementation",
+  "/IMPLEMENTATION_PLAN.md",
+  "/BENCHMARK_PLAN.md",
+]
+
+# ---------------------------------------------------------------------------
+# Test configuration. `--strict-markers` is mandatory for every gate command:
+# an unregistered marker must fail loudly rather than silently skip coverage.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+  "-ra",
+]
+testpaths = [
+  "tests/unit",
+  "tests/contract",
+  "tests/integration",
+  "tests/sandbox",
+  "tests/replay",
+  "tests/live",
+]
+markers = [
+  "unit: fast, hermetic checks of a single module",
+  "contract: checks a frozen interface or its rejection behavior",
+  "integration: multi-module offline workflows",
+  "sandbox: requires the real execution runtime; skipped when unavailable",
+  "replay: deterministic reconstruction from stored artifacts",
+  "slow: long-running; deselect with -m 'not slow'",
+  "live: contacts a real provider; requires explicit configuration",
+  "paid: spends money; requires explicit authorization and spending caps",
+]
+xfail_strict = true
+filterwarnings = ["error"]
+
+# ---------------------------------------------------------------------------
+# Lint and format
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF", "T20", "PTH"]
+ignore = [
+  "RUF012", # ClassVar annotations on mutable schema defaults are handled by pydantic.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["T20"]
+# Scripts and the CLI are the modules whose job is to write to stdout/stderr.
+"src/stealthbench/cli.py" = ["T201"]
+"scripts/**" = ["T20"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["stealthbench"]
+
+# ---------------------------------------------------------------------------
+# Type checking
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+files = ["src/stealthbench"]
+
+[[tool.mypy.overrides]]
+module = ["hypothesis.*"]
+ignore_missing_imports = true

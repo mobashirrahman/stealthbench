@@ -1,0 +1,63 @@
+{
+  "campaign": "live-setup-telemetry-20261004",
+  "credentials_used": false,
+  "disclaimer": "Setup telemetry only, not a benchmark score. Prompts are synthetic; checks use local exact-match rules, not official evaluators.",
+  "findings": {
+    "blocked": [
+      "big-pickle: 403 FreeTierError (usable only from within OpenCode)",
+      "muse-spark-1.3-contributor-free: 500 internal error",
+      "code/agent tracks: no container runtime on this host"
+    ],
+    "catalog_alias_count": 86,
+    "protocol_notes": [
+      "usage reports prompt/completion/total + cached_tokens (128 constant: system-prompt cache)",
+      "reasoning exposed as reasoning_content with separate reasoning_tokens",
+      "cost field always \"0\" on free tier",
+      "latencies 1.8-17.6s single-sequential"
+    ],
+    "space_bunny_free": {
+      "cost_values": [
+        "0"
+      ],
+      "exact_checks_passed": 2,
+      "prompt_digest": "764c0122e3e273e95fcd0070ebeb84ddbfb310ff757c266bc4dbc85acd5034e2",
+      "prompt_token_values": [
+        166,
+        190,
+        175,
+        182,
+        179,
+        173,
+        176,
+        185,
+        165,
+        165,
+        172
+      ],
+      "requests": 11,
+      "succeeded": 11,
+      "token_deltas_vs_baseline": {
+        "space-bunny-free": {
+          "code": 24,
+          "emoji": 7,
+          "multilingual": 10,
+          "numeric": 19,
+          "punct": 16,
+          "unicode": 13,
+          "whitespace": 9
+        }
+      },
+      "window": {
+        "ended_at": "2026-10-04T13:10:04.298275+00:00",
+        "started_at": "2026-10-04T13:08:39.777626+00:00"
+      }
+    },
+    "stealth_aliases_present": [
+      "big-pickle",
+      "space-bunny-free"
+    ]
+  },
+  "raw_artifacts": "artifacts/live-setup-20261004/ (local, gitignored)",
+  "script": "scripts/live_probe.py",
+  "spend_usd": 0.0
+}

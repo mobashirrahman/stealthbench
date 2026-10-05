@@ -1,0 +1,187 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "pilot",
+  "title": "600-item direct pilot plus 50-task agent pilot",
+  "description": "Declared pilot profile. Item selection is a frozen procedure executed in G05 (T05A); until it has run against a verified dataset revision this profile carries no item IDs and cannot be dispatched. Counts below are declared targets, not measured results.",
+  "mode": "live_authorized",
+  "materialized": false,
+  "score_version": "stealthbench-core-pilot-v1",
+  "seed": 20261002,
+  "authorization": {
+    "required": true,
+    "spending_cap_usd": null
+  },
+  "observation_window": {
+    "started_at": null,
+    "ended_at": null,
+    "timezone": "UTC"
+  },
+  "endpoints": [],
+  "benchmarks": [
+    {
+      "benchmark_id": "livecodebench",
+      "track": "direct",
+      "category": "code_generation",
+      "declared_item_count": 100,
+      "expected_item_count": 100,
+      "dataset_id": "livecodebench/code_generation_lite",
+      "dataset_revision": null,
+      "release_window": null,
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "evalplus",
+      "track": "direct",
+      "category": "code_generation",
+      "declared_item_count": 50,
+      "expected_item_count": 50,
+      "dataset_id": "evalplus/humanevalplus",
+      "dataset_revision": null,
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "ifeval",
+      "track": "direct",
+      "category": "instruction_following",
+      "declared_item_count": 150,
+      "expected_item_count": 150,
+      "dataset_id": "google/IFEval",
+      "dataset_revision": null,
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "mmlu_pro",
+      "track": "direct",
+      "category": "general_knowledge",
+      "declared_item_count": 100,
+      "expected_item_count": 100,
+      "dataset_id": "TIGER-Lab/MMLU-Pro",
+      "dataset_revision": null,
+      "stratify_by": [
+        "category"
+      ],
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "math500",
+      "track": "direct",
+      "category": "mathematical_reasoning",
+      "declared_item_count": 100,
+      "expected_item_count": 100,
+      "dataset_id": "HuggingFaceH4/MATH-500",
+      "dataset_revision": null,
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "bfcl",
+      "track": "direct",
+      "category": "tool_use",
+      "declared_item_count": 50,
+      "expected_item_count": 50,
+      "dataset_id": "gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+      "dataset_revision": null,
+      "declared_categories": [],
+      "api_modes": [
+        "native_function_calling",
+        "prompted"
+      ],
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "ruler",
+      "track": "direct",
+      "category": "long_context",
+      "declared_item_count": 50,
+      "expected_item_count": 50,
+      "dataset_id": null,
+      "dataset_revision": null,
+      "generation_seed": 42,
+      "task_versions": [],
+      "context_lengths": [],
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "swebench",
+      "track": "agent",
+      "category": "agent_repository",
+      "declared_item_count": 25,
+      "expected_item_count": 25,
+      "dataset_id": "SWE-bench/SWE-bench_Verified",
+      "dataset_revision": null,
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": false
+    },
+    {
+      "benchmark_id": "terminalbench",
+      "track": "agent",
+      "category": "agent_terminal",
+      "declared_item_count": 25,
+      "expected_item_count": 25,
+      "dataset_id": "terminal-bench/terminal-bench",
+      "dataset_revision": null,
+      "image_digest": null,
+      "item_ids": [],
+      "repeats": 1,
+      "core_category": false
+    }
+  ],
+  "signature_probes": {
+    "probe_version": "probe-v1",
+    "probe_count": 60,
+    "repeats": 3,
+    "separate_from_benchmarks": true
+  },
+  "setup_profile": {
+    "campaign_id": "setup-80",
+    "direct_item_count": 80,
+    "purpose": "Establish measured cost, protocol support and token accounting before committing to the pilot."
+  },
+  "generation": {
+    "max_output_tokens": 4096,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "seed": 20261002,
+    "stream": false,
+    "unsupported_settings_are_errors": true
+  },
+  "retry_policy": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 2.0,
+    "multiplier": 2.0,
+    "max_backoff_seconds": 60.0,
+    "retryable_statuses": [
+      408,
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
+  },
+  "limits": {
+    "max_requests": 20000,
+    "max_concurrency": 8,
+    "max_input_tokens": 50000000,
+    "max_output_tokens": 20000000,
+    "max_total_cost_usd": 250.0,
+    "max_wall_seconds": 86400,
+    "require_cost_bounds": true,
+    "missingness_threshold": 0.05
+  },
+  "budget_scope": "campaign"
+}

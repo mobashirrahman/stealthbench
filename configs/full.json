@@ -1,0 +1,182 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "full",
+  "title": "Full declared official splits",
+  "description": "Full-suite profile. Unlike the pilot, this profile requires the entire declared official split to be enumerated item by item. A subset is never relabelled as a full run: partial coverage produces a qualified partial report, not this campaign.",
+  "mode": "live_authorized",
+  "materialized": false,
+  "score_version": "stealthbench-core-full-v1",
+  "seed": 20261002,
+  "authorization": {
+    "required": true,
+    "spending_cap_usd": null
+  },
+  "observation_window": {
+    "started_at": null,
+    "ended_at": null,
+    "timezone": "UTC"
+  },
+  "endpoints": [],
+  "benchmarks": [
+    {
+      "benchmark_id": "livecodebench",
+      "track": "direct",
+      "category": "code_generation",
+      "dataset_id": "livecodebench/code_generation_lite",
+      "dataset_revision": null,
+      "release_window": null,
+      "require_full_split": true,
+      "item_ids": [],
+      "expected_item_count": 1055,
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "evalplus",
+      "track": "direct",
+      "category": "code_generation",
+      "dataset_id": "evalplus/humanevalplus",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "item_ids": [],
+      "expected_item_count": 164,
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "ifeval",
+      "track": "direct",
+      "category": "instruction_following",
+      "dataset_id": "google/IFEval",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "item_ids": [],
+      "expected_item_count": 541,
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "mmlu_pro",
+      "track": "direct",
+      "category": "general_knowledge",
+      "dataset_id": "TIGER-Lab/MMLU-Pro",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "item_ids": [],
+      "expected_item_count": 12032,
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "math500",
+      "track": "direct",
+      "category": "mathematical_reasoning",
+      "dataset_id": "HuggingFaceH4/MATH-500",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "item_ids": [],
+      "expected_item_count": 500,
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "bfcl",
+      "track": "direct",
+      "category": "tool_use",
+      "dataset_id": "gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "declared_categories": [],
+      "api_modes": [
+        "native_function_calling",
+        "prompted"
+      ],
+      "item_ids": [],
+      "expected_item_count": null,
+      "split_enumeration": "Every scored BFCL_v4_<category>.json file at the pinned commit f7cf7359, excluding the non-scoring format_sensitivity and live_relevance categories. The category list is frozen in G08 (T08A); until then the count is genuinely unknown rather than guessed.",
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "ruler",
+      "track": "direct",
+      "category": "long_context",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "require_full_split": true,
+      "generation_seed": 42,
+      "task_versions": [],
+      "context_lengths": [],
+      "item_ids": [],
+      "expected_item_count": null,
+      "split_enumeration": "RULERv1 13 tasks at rulerv1-ns commit e8bbff67, num_samples 100 per task, across the supported context-length sweep. RULERv2 is a different pipeline with a different scorer and is excluded; mixing them would break comparability.",
+      "repeats": 1,
+      "core_category": true
+    },
+    {
+      "benchmark_id": "swebench",
+      "track": "agent",
+      "category": "agent_repository",
+      "dataset_id": "SWE-bench/SWE-bench_Verified",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "item_ids": [],
+      "expected_item_count": 500,
+      "repeats": 1,
+      "core_category": false
+    },
+    {
+      "benchmark_id": "terminalbench",
+      "track": "agent",
+      "category": "agent_terminal",
+      "dataset_id": "terminal-bench/terminal-bench",
+      "dataset_revision": null,
+      "require_full_split": true,
+      "item_digest_manifest": null,
+      "item_ids": [],
+      "expected_item_count": 66,
+      "repeats": 1,
+      "core_category": false
+    }
+  ],
+  "signature_probes": {
+    "probe_version": "probe-v1",
+    "probe_count": 60,
+    "repeats": 3,
+    "separate_from_benchmarks": true
+  },
+  "generation": {
+    "max_output_tokens": 8192,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "seed": 20261002,
+    "stream": false,
+    "unsupported_settings_are_errors": true
+  },
+  "retry_policy": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 2.0,
+    "multiplier": 2.0,
+    "max_backoff_seconds": 60.0,
+    "retryable_statuses": [
+      408,
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
+  },
+  "limits": {
+    "max_requests": 500000,
+    "max_concurrency": 8,
+    "max_input_tokens": 500000000,
+    "max_output_tokens": 100000000,
+    "max_total_cost_usd": 5000.0,
+    "max_wall_seconds": 604800,
+    "require_cost_bounds": true,
+    "missingness_threshold": 0.05
+  },
+  "budget_scope": "campaign",
+  "comparability_rule": "External published scores are comparable only where dataset revision, prompt, extraction rule, generation settings, scaffold and grading protocol are all equivalent. Any difference must be disclosed, not averaged away."
+}

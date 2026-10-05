@@ -1,0 +1,372 @@
+{
+  "artifacts": [
+    "src/stealthbench/storage/events.py",
+    "src/stealthbench/storage/index.py",
+    "src/stealthbench/storage/replay.py"
+  ],
+  "collected": 440,
+  "commands": [
+    {
+      "command": "ruff check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "lint",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": "ruff format --check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "format",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "33 files already formatted"
+      ]
+    },
+    {
+      "command": "mypy src/stealthbench",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "typecheck",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 11 source files"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "unit_contract",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "........................                                                 [100%]",
+        "312 passed in 8.93s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/integration tests/replay -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "integration_replay",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        ".....................................................                    [100%]",
+        "125 passed in 7.81s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "full_offline_collection",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "SKIPPED [2] tests/live/test_live_authorization.py:30: blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+        "438 passed, 2 skipped in 16.73s"
+      ]
+    },
+    {
+      "command": "stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_validate",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": "stealthbench bogus-command",
+      "exit_status": 2,
+      "expectation": "non-zero exit",
+      "name": "cli_invalid_command",
+      "satisfied": true,
+      "stderr_tail": [
+        "usage: stealthbench [-h] [--version] <command> ...",
+        "stealthbench: error: argument <command>: invalid choice: 'bogus-command' (choose from 'version', 'manifest', 'run', 'replay', 'report', 'signatures', 'identify', 'doctor')"
+      ],
+      "stdout_tail": []
+    },
+    {
+      "command": "stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "expectation": "non-zero exit",
+      "name": "cli_run_pending",
+      "satisfied": true,
+      "stderr_tail": [
+        "{\"command\": \"run\", \"gate\": \"G04\", \"status\": \"not_implemented\"}"
+      ],
+      "stdout_tail": []
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/replay",
+    "tests/live"
+  ],
+  "depends_on_gates": [
+    "G01"
+  ],
+  "environment": {
+    "dependency_lock": "constraints-dev.txt",
+    "platform": "linux",
+    "python": "3.12.3",
+    "sqlite": "stdlib, one short-lived connection per operation",
+    "tool_versions": {
+      "httpx": "0.28.1",
+      "mypy": "1.18.2",
+      "pydantic": "2.12.5",
+      "pytest": "9.1.1",
+      "ruff": "0.15.1"
+    },
+    "venv": ".venv"
+  },
+  "exit_statuses": {
+    "cli_invalid_command": 2,
+    "cli_run_pending": 3,
+    "cli_validate": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_criteria": [
+    {
+      "criterion": "interrupted writes cannot invent completed samples",
+      "evidence": "A truncated tail, an unparsable line, a schema-invalid line, invalid UTF-8, a missing payload, a tampered payload, a rewritten payload digest and a reordered log are each reported as Damage and withheld. Event identity binds the payload digest and the record ordinal, so a spliced or repointed record is detectable. The crash scenario is produced by an actual SIGKILL of a writer process as soon as the log appears, not by a fixed sleep; the test asserts the writer died and that a non-empty set of records survived with verifiable payloads.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "redacted exports contain no canary secrets",
+      "evidence": "Redaction runs before the payload is written, so the log itself is clean. Keys as well as values are redacted. Known credential shapes (sk-, ghp_, AIza, AKIA, xox, JWT, PEM, 'api_key=' forms) and environment-sourced secrets are replaced with [REDACTED]. Credential-named headers are always redacted. Every user-controlled CSV cell, including attempt_id and manifest_hash, goes through redaction and formula defusing. test_g02_gate.py asserts no canary survives the events file, the JSON export or the CSV export. Redaction is proven idempotent and proven not to damage hashes, versions or counts.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "replaying saved generations does not contact a provider",
+      "evidence": "ReplayReader is constructed from paths only and exposes no client, transport, session or credential attribute. The module imports no http/requests/socket/urllib, asserted by AST inspection. Replay is exercised with credentials set and the autouse socket guard active. Strict replay refuses to reconstruct from a damaged store rather than returning a partial result, and refuses a payload whose provenance disagrees with the event carrying it.",
+      "result": "satisfied"
+    }
+  ],
+  "gate_id": "G02",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 125,
+      "failed": 0,
+      "passed": 125,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 312,
+      "failed": 0,
+      "passed": 312,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "mutation_checks": [
+    {
+      "detected_by": [],
+      "failures_observed": 0,
+      "mutation": "index samples inserted with plain INSERT instead of INSERT OR REPLACE",
+      "note": "NOT DETECTED, and the withdrawn record wrongly claimed it was. ingest deletes and reinserts, so idempotence does not depend on the conflict clause. Re-measured rather than assumed; the property is covered instead by test_a_full_rebuild_drops_nothing and the repeated-ingest tests."
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_redaction.py::test_both_accepted_sample_counts_agree"
+      ],
+      "failures_observed": 1,
+      "mutation": "drop DISTINCT from the accepted-sample count"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_a_reordered_log_is_detected",
+        "tests/integration/test_storage_recovery.py::test_identical_payloads_get_distinct_event_ids"
+      ],
+      "failures_observed": 1,
+      "mutation": "sequence/ordinal check disabled on read"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_rewriting_a_payload_digest_is_detected"
+      ],
+      "failures_observed": 1,
+      "mutation": "event_id derivation check disabled"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_invalid_utf8_is_reported_not_silently_replaced"
+      ],
+      "failures_observed": 1,
+      "mutation": "strict UTF-8 decoding reverted to errors='replace'"
+    },
+    {
+      "detected_by": [
+        "tests/replay/test_replay_reader.py::test_a_payload_may_not_claim_a_different_campaign"
+      ],
+      "failures_observed": 1,
+      "mutation": "replay stops binding sample_key.campaign_id to event.campaign_id"
+    },
+    {
+      "detected_by": [
+        "tests/replay/test_replay_reader.py::test_unresolved_attempts_are_replayed_as_unresolved"
+      ],
+      "failures_observed": 2,
+      "mutation": "request.dispatched removed from the replay result event types"
+    },
+    {
+      "detected_by": [
+        "tests/replay/test_replay_reader.py::test_a_completion_event_may_not_carry_a_failed_status",
+        "tests/replay/test_replay_reader.py::test_a_failure_event_may_not_carry_accepted_status"
+      ],
+      "failures_observed": 2,
+      "mutation": "replay stops cross-checking delivery_status against the event type"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_redaction.py::test_a_hostile_attempt_id_is_redacted_and_defused_in_csv"
+      ],
+      "failures_observed": 1,
+      "mutation": "attempt_id routed around the CSV redaction/defusing helper"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_a_secret_used_as_a_mapping_key_is_redacted"
+      ],
+      "failures_observed": 1,
+      "mutation": "mapping keys no longer redacted"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_appending_after_a_lost_newline_does_not_concatenate"
+      ],
+      "failures_observed": 1,
+      "mutation": "newline repair before append disabled"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_a_tampered_payload_is_detected"
+      ],
+      "failures_observed": 4,
+      "mutation": "payload hash verification skipped on read"
+    },
+    {
+      "detected_by": [
+        "tests/integration/test_storage_recovery.py::test_a_canary_in_a_provider_error_is_redacted_at_write_time"
+      ],
+      "failures_observed": 4,
+      "mutation": "redaction skipped at write time"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_g02_gate.py::test_strict_replay_refuses_corrupt_provenance"
+      ],
+      "failures_observed": 2,
+      "mutation": "strict replay tolerates corrupt provenance"
+    }
+  ],
+  "not_established_by_this_gate": [
+    "No generation has been dispatched; `run` still exits 3 pending G04.",
+    "The offline-demo campaign still cannot run end to end: it needs a fixture transport from G03 (T03A) and a scheduler from G04.",
+    "No official benchmark grader has been wrapped yet; grading here uses a test double to prove determinism only.",
+    "No dataset, evaluator or provider has been contacted.",
+    "Live readiness, setup, pilot and full-run gates remain blocked_external."
+  ],
+  "passed": 438,
+  "prerequisite_evidence": [
+    "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json"
+  ],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T02A",
+    "T02B",
+    "T02C"
+  ],
+  "review": {
+    "guards_added_for_defects": [
+      "tests/integration/test_storage_recovery.py: complete-but-unterminated record read; single-record variant; truly-truncated still damage; append after a lost newline does not concatenate; invalid utf8 reported; rewritten payload digest detected; identical payloads get distinct ids; reordered log detected; secret-as-mapping-key redacted in artifact and export; real SIGKILL mid-append.",
+      "tests/integration/test_redaction.py: both accepted counts agree; export publishes no contradictory counts; hostile attempt_id redacted and defused in CSV; subset rebuild reports dropped_rows; full rebuild drops nothing; events_skipped counts damage not blanks.",
+      "tests/replay/test_replay_reader.py: unresolved attempt reconstructed with delivery_status asserted and is_accepted_sample False, and reaching index and export; payload may not claim a different campaign; completion event may not carry a failed status and vice versa."
+    ],
+    "non_blocking_observations_left_unchanged": [
+      "Set-valued fields are not order-canonicalized, so two semantically identical profiles can hash differently; over-sensitivity is safer and the plan only requires key-order invariance.",
+      "base64 and homoglyph encodings of a secret are not matched by pattern. Unrecognised secrets are caught only via the environment or an explicitly registered set; that limitation is documented rather than papered over.",
+      "No directory fsync after rename, so a power loss (as opposed to a process kill) can lose an artifact. That fails safe: it surfaces as missing_payload.",
+      "'Preserve restricted raw data only when explicitly configured' is not implemented; every log is unconditionally redacted, which is the safe direction. No contract field exists for the opt-in yet.",
+      "Ordering is approximated: monotonic_duration_seconds is stored and surfaced but is not cross-checked between records."
+    ],
+    "resolved": [
+      "1. A credential echoed as a JSON *key* was never redacted and persisted in the artifact and JSON export. redact_mapping now redacts keys as well as values; covered for both the artifact and the export.",
+      "2. A complete final record whose newline was lost was dropped, and in the single-record case the store reported clean with zero events. The final segment is now parsed like any other; a lost newline is disclosed as missing_trailing_newline rather than reported as damage, and only an unparsable tail is truncated_final_line.",
+      "3. Invalid UTF-8 was decoded with errors='replace', turning corrupt bytes into U+FFFD inside an apparently valid record. Decoding is now strict and reports invalid_encoding, yielding no events.",
+      "4. payload_hash was checked only for self-consistency, so rewriting it repointed an event at another valid artifact. Event identity is now derived from campaign, type, payload digest AND ordinal, and re-derived on read; a rewrite reports event_id_mismatch.",
+      "5. Two identical payloads produced the same content-derived event_id and collapsed into one index row. RunEvent gained a required `sequence` ordinal, folded into event identity. A side effect: a reordered log is now detected as sequence_mismatch.",
+      "6. export_csv routed attempt_id and manifest_hash around _csv_cell, leaking both a secret and a formula. Both now go through it.",
+      "7. The index published a row count and a distinct-key count side by side under similar names and they could disagree. counts()['accepted_samples'] now uses the DISTINCT query, and export_json is asserted to agree.",
+      "8. Replay never compared the payload's sample_key.campaign_id with the event's, so a crafted payload could attribute a sample to another campaign. Now rejected; the same applies to delivery_status disagreeing with the event type.",
+      "9. An unresolved (dispatched, unconfirmed) attempt was silently dropped, because request.dispatched was not a result event type. It is now reconstructed, surfaces through unresolved_attempts(), and reaches the index and export. The test that claimed to cover this was vacuous and was rewritten.",
+      "10. The withdrawn evidence record claimed a mutation check that did not reproduce. Re-measured honestly below: mutation_checks[0] reports zero failures.",
+      "11. The process-interruption test let the writer finish before the kill, so it interrupted nothing and its assertion short-circuited on an empty result. It now waits for the log to appear and kills immediately, asserts the writer was killed, and requires a non-empty result.",
+      "12. index.ingest silently dropped rows when re-fed with a shorter result set. A rebuild is now explicitly a full rebuild from the caller's set and IndexStats.dropped_rows reports exactly what it removed, so the loss is never silent.",
+      "13. events_skipped counted blank lines and omitted the truncated tail. It now counts damaged records."
+    ],
+    "round": 2,
+    "round_1_findings": 13,
+    "round_1_outcome": "FAIL"
+  },
+  "review_decision": "PASS",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py::test_live_suite_requires_explicit_authorization": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+    "tests/live/test_live_authorization.py::test_paid_suite_requires_a_numeric_spending_cap": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35",
+    "kind": "source_tree_sha256",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d' ' -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 178,
+    "tests/integration": 98,
+    "tests/live": 3,
+    "tests/replay": 27,
+    "tests/sandbox": 0,
+    "tests/unit": 134
+  },
+  "supersede_reason": "Independent review found 13 defects, all real. The withdrawn record also claimed a mutation check that did not reproduce (see mutation_checks[0] below), which the review confirmed. Every defect is fixed with a dedicated regression test, and every mutation below was re-measured.",
+  "supersedes": "implementation/evidence/G02/b57079bdaf26ac974899269b20d5a273e9a8c99c2409ca424ffbb11364353606",
+  "task_acceptance": {
+    "T02A": {
+      "evidence": "Interrupted writes (real SIGKILL), partial final JSONL records, duplicate ingestion, mismatched hashes, event ordering, credential-bearing headers and errors, and recognizable canaries are covered in tests/integration/test_storage_recovery.py.",
+      "result": "satisfied"
+    },
+    "T02B": {
+      "evidence": "Idempotent ingestion proven by repeated ingest; headers, error bodies and both exports proven canary-free; CSV formula injection defused for all four leading characters on every user-controlled field; absent usage exported as empty/None, never 0; a lossy rebuild reports dropped_rows.",
+      "result": "satisfied"
+    },
+    "T02C": {
+      "evidence": "tests/replay/test_replay_reader.py reconstructs stored generations, reconstructs unresolved attempts, refuses corrupt provenance in strict mode, binds payload provenance to the event, and regrades deterministically.",
+      "result": "satisfied"
+    }
+  },
+  "vacuous_suites": {
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07). tests/replay was vacuous through G01 and now collects 27."
+  }
+}

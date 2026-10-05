@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "gate_id": "G11",
+  "recorded_on": "2026-10-04",
+  "source_revision": {
+    "kind": "commit",
+    "digest": "9d6c35027a77e32ecef2115318bccc7219954f97"
+  },
+  "required_tasks": [
+    "T11A",
+    "T11B",
+    "T11C"
+  ],
+  "depends_on_gates": [
+    "G04",
+    "G09"
+  ],
+  "commands": [
+    {
+      "command": "python3 -m ruff check .",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m ruff format --check .",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m mypy src/stealthbench",
+      "exit_status": 0
+    },
+    {
+      "command": "PYTHONPATH=src python3 -m pytest --strict-markers -q tests/unit/test_probe_manifest.py tests/unit/test_fingerprint_validity.py tests/unit/test_similarity.py",
+      "exit_status": 0,
+      "collected": 35,
+      "passed": 35,
+      "failed": 0,
+      "skipped": 0,
+      "summary_tail": "35 passed in 0.11s"
+    }
+  ],
+  "collected": 35,
+  "passed": 35,
+  "failed": 0,
+  "skipped": 0,
+  "passed_gate": true,
+  "review_decision": "PASS (provisional: implementation complete and gate suites green; no independent review pass recorded yet)",
+  "note": "Live suites skip as blocked_external without STEALTHBENCH_LIVE_AUTHORIZATION=1. No benchmark result exists; no provider was contacted."
+}

@@ -1,0 +1,392 @@
+{
+  "artifacts": [
+    "src/stealthbench/adapters/base.py",
+    "src/stealthbench/adapters/zen.py",
+    "src/stealthbench/adapters/streaming.py",
+    "tests/fixtures/zen/chat.completions.json",
+    "tests/fixtures/zen/chat.completions.stream.sse",
+    "tests/fixtures/zen/chat.completions.truncated.sse",
+    "tests/fixtures/zen/chat.completions.server_error.sse"
+  ],
+  "collected": 820,
+  "commands": [
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "43 files already formatted"
+      ]
+    },
+    {
+      "command": ".venv/bin/mypy src/stealthbench",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 15 source files"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 692,
+      "_skipped": 0,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/unit tests/contract",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "692 passed in 9.42s"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 125,
+      "_skipped": 0,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/integration tests/replay",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "125 passed in 7.86s"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 818,
+      "_skipped": 2,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "818 passed, 2 skipped in 17.22s"
+      ]
+    },
+    {
+      "command": ".venv/bin/stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"planned_requests\": 3,",
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": ".venv/bin/stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "{\"command\": \"run\", \"gate\": \"G04\", \"status\": \"not_implemented\"}"
+      ]
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/replay",
+    "tests/live"
+  ],
+  "depends_on_gates": [
+    "G00",
+    "G01",
+    "G02"
+  ],
+  "exit_statuses": {
+    "cli_run": 3,
+    "cli_validate": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_id": "G03",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 125,
+      "failed": 0,
+      "passed": 125,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 692,
+      "failed": 0,
+      "passed": 692,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "mutation_checks": [
+    {
+      "defect": "1: terminal finish_reason dropped when content shares the record",
+      "detected": true,
+      "mutation": "M1"
+    },
+    {
+      "defect": "2: CRLF/CR framing loses all content",
+      "detected": true,
+      "mutation": "M2"
+    },
+    {
+      "defect": "3: a string/number capability becomes True",
+      "detected": true,
+      "mutation": "M3"
+    },
+    {
+      "defect": "4: junk token usage coerced instead of absent",
+      "detected": true,
+      "mutation": "M4"
+    },
+    {
+      "defect": "5a: Zen effective settings skip redaction entirely",
+      "detected": true,
+      "mutation": "M5"
+    },
+    {
+      "defect": "5b: the fixture adapter's effective settings skip redaction",
+      "detected": true,
+      "mutation": "M5b"
+    },
+    {
+      "defect": "5c: a fixture tool-call argument skips redaction",
+      "detected": true,
+      "mutation": "M5c"
+    },
+    {
+      "defect": "5d: Zen provider metadata skips redaction",
+      "detected": true,
+      "mutation": "M5d"
+    },
+    {
+      "defect": "6: streamed results carry no route label",
+      "detected": true,
+      "mutation": "M6"
+    },
+    {
+      "defect": "8: the generic repeat record shadows a repeat-specific one",
+      "detected": true,
+      "mutation": "M7"
+    },
+    {
+      "defect": "new: mid-stream error frame silently becomes an interruption",
+      "detected": true,
+      "mutation": "M8"
+    },
+    {
+      "defect": "review-1 CRITICAL: the fixture path synthesises data: [DONE] again",
+      "detected": true,
+      "mutation": "M10"
+    },
+    {
+      "defect": "review-1 CRITICAL: the Zen path synthesises data: [DONE] again",
+      "detected": true,
+      "mutation": "M11"
+    },
+    {
+      "defect": "review-2 MAJOR: declared secrets are not forwarded to the streaming parser",
+      "detected": true,
+      "mutation": "M12"
+    },
+    {
+      "defect": "review-3 MAJOR: an absent finish reason is reported as a clean stop",
+      "detected": true,
+      "mutation": "M13"
+    },
+    {
+      "defect": "review-4 MAJOR: an eagerly converted trailing CR fabricates a record boundary",
+      "detected": true,
+      "mutation": "M14"
+    },
+    {
+      "defect": "review-5: usage on the terminal record is dropped again",
+      "detected": true,
+      "mutation": "M15"
+    },
+    {
+      "defect": "review-6: a content-parts delta is dropped again",
+      "detected": true,
+      "mutation": "M16"
+    },
+    {
+      "defect": "review-7: recorded unsupported settings are ignored when streaming",
+      "detected": true,
+      "mutation": "M17"
+    },
+    {
+      "defect": "review-8: a malformed catalog raises out of discover(",
+      "detected": true,
+      "mutation": "M18"
+    },
+    {
+      "defect": "review-9: a fabricated offset is paired with a measured total again",
+      "detected": true,
+      "mutation": "M19"
+    },
+    {
+      "defect": "review-10: an unqualified transcript key is matched however many aliases exist",
+      "detected": true,
+      "mutation": "M20"
+    },
+    {
+      "defect": "review-11: a corrupt byte stalls the rest of the stream again",
+      "detected": true,
+      "mutation": "M21"
+    },
+    {
+      "defect": "review-12: a /models path with a query string is not recognised",
+      "detected": true,
+      "mutation": "M22"
+    },
+    {
+      "defect": "review-13: a boolean context window is recorded as a measurement",
+      "detected": true,
+      "mutation": "M23"
+    },
+    {
+      "defect": "review-14: an explicit null route becomes the string 'None'",
+      "detected": true,
+      "mutation": "M24"
+    },
+    {
+      "defect": "review-15: the two catalog digests diverge again",
+      "detected": true,
+      "mutation": "M25"
+    },
+    {
+      "defect": "review3-1: the alias guard counts id only and allows zero or one",
+      "detected": true,
+      "mutation": "M26"
+    },
+    {
+      "defect": "review3-6: a non-True stream_terminated is read as terminated again",
+      "detected": true,
+      "mutation": "M27"
+    },
+    {
+      "defect": "review3-7: a later reported count overwrites an earlier one again",
+      "detected": true,
+      "mutation": "M28"
+    },
+    {
+      "defect": "review3-5: str.splitlines truncates a record on a unicode separator again",
+      "detected": true,
+      "mutation": "M29"
+    },
+    {
+      "defect": "review3-4: an implausible pacing offset is stored instead of dropped",
+      "detected": true,
+      "mutation": "M30"
+    },
+    {
+      "defect": "review3-2: a terminated capture with no usable frames is accepted again",
+      "detected": true,
+      "mutation": "M31"
+    },
+    {
+      "defect": "review3-3: the requested value of stream is fabricated as False again",
+      "detected": true,
+      "mutation": "M32"
+    },
+    {
+      "defect": "review3-13: a boolean context window is recorded on the fixture route again",
+      "detected": true,
+      "mutation": "M33"
+    },
+    {
+      "defect": "review3-14: an explicit null route becomes the string 'None' on the fixture route",
+      "detected": true,
+      "mutation": "M34"
+    },
+    {
+      "defect": "review3-7: zen recorded unsupported settings are dropped on the stream path",
+      "detected": true,
+      "mutation": "M35"
+    },
+    {
+      "defect": "new: the catalog is not read from the recorded GET /models response",
+      "detected": true,
+      "mutation": "M9"
+    }
+  ],
+  "mutation_note": "Every mutation was applied to the working tree, the named suites were run with bytecode caching disabled, the expected failure was observed, and the source was restored; a final restore check runs the contract suite, and an interrupt or kill restores the file too. A mutation whose anchor no longer matches the source is reported as SKIP and counted as a failure, so a stale harness cannot inflate this list.",
+  "passed": 818,
+  "passed_gate": true,
+  "prerequisite_evidence": [
+    "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json",
+    "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json",
+    "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json"
+  ],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T03A",
+    "T03B",
+    "T03C"
+  ],
+  "review": {
+    "decision_source": "three independent reviews of G03, each followed by remediation and re-measurement",
+    "defects_fixed": {
+      "round_1": 9,
+      "round_2": 16,
+      "round_3": 9
+    },
+    "defects_found_while_remediating": [
+      "The harness could report a mutation as surviving when a cached .pyc had masked it; bytecode caching is now disabled for every mutation run, and the previously reported survivors were re-measured and are caught.",
+      "A test asserting a whitespace-only answer should be delivered rather than invented away was wrong in the other direction too: a frame carrying no delta at all is not the same thing, and is now refused.",
+      "Two of my own regressions were caught by the suite during this round: an eager CR conversion and an over-narrow truncation test that hid a decode change."
+    ],
+    "defects_reported": {
+      "round_1": 9,
+      "round_2": 16,
+      "round_3": 9
+    },
+    "review_rounds": 3,
+    "round_3_most_serious": [
+      "MAJOR: the alias-ambiguity guard counted only `id` while the snapshot builder reads id/alias/slug, so a slug-keyed catalog counted zero aliases and an unqualified transcript key was replayed as a sample for every endpoint. Absences now read through the same normalizer, and a capture with no catalog evidence counts as ambiguous.",
+      "MAJOR: a capture whose frames were unusable was accepted as an empty answer, because only the container length was checked. A terminated stream that carried no content, reasoning or usage is now refused as a protocol failure.",
+      "MODERATE: the unsupported-setting report hardcoded `stream` to False and omitted seed, so it recorded values the request never carried and dropped ones it did.",
+      "MODERATE: the pacing escape hatch could still pair an offset past the measured total, or a negative, NaN or infinite one, and raise ValidationError out of adapter.stream(). Implausible offsets are now dropped, never clamped.",
+      "MODERATE: str.splitlines() truncated a record at U+0085, U+2028, U+2029 and the C0 separators, which JSON permits raw inside a string. The answer was lost and a mid-stream error frame was silently downgraded to an interruption, defeating the error-frame guard. Records are now split on CR and LF only.",
+      "MINOR: the two adapters read stream_terminated differently, so the same capture could get opposite verdicts. Both now treat only a real True as terminated.",
+      "MINOR: usage merge was last-wins and undocumented, so a terminal 0 overwrote a reported 100. Precedence is first-reported-wins and is stated in the docstring.",
+      "MINOR: the dead unknown-setting loop survived the previous round's cleanup.",
+      "MINOR: the mutation harness was not crash-safe and could leave a mutated adapter in the tree when interrupted, and a stale __pycache__ entry could make a mutation invisible."
+    ]
+  },
+  "review_decision": "PENDING",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "96e62b89d3f747ec3aecd091b8435b3e70695c4f96f7d9ca3ab3850c1c692e74",
+    "kind": "source_tree_sha256",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d\" \" -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 558,
+    "tests/integration": 98,
+    "tests/live": 3,
+    "tests/replay": 27,
+    "tests/sandbox": 0,
+    "tests/unit": 134
+  },
+  "supersede_chain": [
+    "implementation/evidence/G03/915a9bf5eee389ab7ba6a7cd0734895c3a939b0fa827973b712c49e1069d0030/gate.json",
+    "implementation/evidence/G03/f7cc19aa33e54e3eabbf65ff9a6b8c72a358f8f6bdc3e40744aa3ed2a589938b/gate.json"
+  ],
+  "supersede_reason": "This record supersedes the two earlier G03 attempts, both of which recorded review_decision PENDING and are retained unchanged. Three independent reviews of G03 returned FAIL, finding 9, then 16, then 9 defects; every one is fixed with a dedicated regression test, and all 38 mutations below were applied, observed to fail, and restored. The most serious defect found was that both adapters appended a synthetic data: [DONE], so a capture from a connection that died replayed as a complete accepted sample.",
+  "supersedes": "implementation/evidence/G03/915a9bf5eee389ab7ba6a7cd0734895c3a939b0fa827973b712c49e1069d0030/gate.json",
+  "vacuous_suites": {
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07)"
+  }
+}

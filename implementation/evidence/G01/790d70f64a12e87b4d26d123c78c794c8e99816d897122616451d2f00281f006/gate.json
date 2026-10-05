@@ -1,0 +1,337 @@
+{
+  "artifacts": [
+    "src/stealthbench/schemas/hashing.py",
+    "src/stealthbench/schemas/campaign.py",
+    "src/stealthbench/schemas/results.py",
+    "src/stealthbench/schemas/manifest.py",
+    "configs/offline-demo.json",
+    "configs/pilot.json",
+    "configs/full.json"
+  ],
+  "collected": 315,
+  "commands": [
+    {
+      "command": "ruff check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "lint",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": "ruff format --check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "format",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "25 files already formatted"
+      ]
+    },
+    {
+      "command": "mypy src/stealthbench",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "typecheck",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 7 source files"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "unit_contract",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "........................................................................ [ 96%]",
+        "..........                                                               [100%]",
+        "298 passed in 9.85s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/integration tests/replay -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "integration_replay",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "..............                                                           [100%]",
+        "14 passed in 4.60s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "full_offline_collection",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "=========================== short test summary info ============================",
+        "SKIPPED [2] tests/live/test_live_authorization.py:30: blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+        "313 passed, 2 skipped in 13.90s"
+      ]
+    },
+    {
+      "command": "stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_validate_offline",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"planned_requests\": 3,",
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": "stealthbench manifest validate configs/full.json",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_validate_full",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"planned_requests\": null,",
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": "stealthbench bogus-command",
+      "exit_status": 2,
+      "expectation": "non-zero exit",
+      "name": "cli_invalid_command",
+      "satisfied": true,
+      "stderr_tail": [
+        "usage: stealthbench [-h] [--version] <command> ...",
+        "stealthbench: error: argument <command>: invalid choice: 'bogus-command' (choose from 'version', 'manifest', 'run', 'replay', 'report', 'signatures', 'identify', 'doctor')"
+      ],
+      "stdout_tail": []
+    },
+    {
+      "command": "stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "expectation": "non-zero exit",
+      "name": "cli_run_pending",
+      "satisfied": true,
+      "stderr_tail": [
+        "{\"command\": \"run\", \"gate\": \"G04\", \"status\": \"not_implemented\"}"
+      ],
+      "stdout_tail": []
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/live"
+  ],
+  "depends_on_gates": [
+    "G00"
+  ],
+  "environment": {
+    "dependency_lock": "constraints-dev.txt",
+    "platform": "linux",
+    "python": "3.12.3",
+    "tool_versions": {
+      "hatchling": "1.28.0",
+      "httpx": "0.28.1",
+      "mypy": "1.18.2",
+      "pydantic": "2.12.5",
+      "pytest": "9.1.1",
+      "ruff": "0.15.1"
+    },
+    "venv": ".venv"
+  },
+  "exit_statuses": {
+    "cli_invalid_command": 2,
+    "cli_run_pending": 3,
+    "cli_validate_full": 0,
+    "cli_validate_offline": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_criteria": [
+    {
+      "criterion": "invalid manifests fail before any model request",
+      "evidence": "tests/contract/test_g01_gate.py::test_invalid_manifest_is_rejected parametrizes 11 distinct invalid manifests and requires a ValidationError from each; the CLI exits 1 on an invalid manifest and never reaches a transport. Unknown schema versions, unknown enum members, non-finite limits, duplicate IDs, retrying a 2xx, missing cost caps and smuggled credential fields are all rejected.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "a request cannot contain gold-answer or evaluator-only fields",
+      "evidence": "ModelRequest and PromptRef are both extra='forbid' at every nesting level; EVALUATOR_ONLY_FIELDS is asserted disjoint from the request schema; EvaluationPayload.assert_absent_from re-checks the serialized request; TaskSpec.safe_request re-verifies both the prompt hash and the absence of gold. Verified against pydantic escape hatches: a model_construct-built task still cannot dispatch a gold answer.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "every sample can be traced to its exact manifest and prompt",
+      "evidence": "trace_key binds manifest_hash and prompt_hash; GenerationResult carries manifest_hash (nullable, never backfilled) and a SampleKey; tests assert that changing stop sequences, the evaluator revision, the dataset revision, an item selection or any capability changes the relevant digest.",
+      "result": "satisfied"
+    }
+  ],
+  "gate_id": "G01",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 14,
+      "failed": 0,
+      "passed": 14,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 298,
+      "failed": 0,
+      "passed": 298,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "mutation_checks": [
+    {
+      "detected_by": [
+        "tests/contract/test_result_schema.py::test_stop_sequences_are_part_of_the_prompt_identity"
+      ],
+      "failures_observed": 1,
+      "mutation": "PromptRef drops `stop` again"
+    },
+    {
+      "detected_by": [
+        "tests/unit/test_campaign_schema.py::test_serialized_manifest_contains_no_canary"
+      ],
+      "failures_observed": 1,
+      "mutation": "free-text manifest fields accept credential values"
+    },
+    {
+      "detected_by": [
+        "tests/unit/test_campaign_schema.py::test_credential_ref_allowlist_rejects_unlisted_secret_shapes"
+      ],
+      "failures_observed": 1,
+      "mutation": "credential_ref falls back to a blocklist"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_result_schema.py::test_a_pass_with_a_nonzero_command_status_is_rejected"
+      ],
+      "failures_observed": 1,
+      "mutation": "GateEvidence drops the zero-passing and non-zero-command checks"
+    },
+    {
+      "detected_by": [
+        "tests/unit/test_campaign_schema.py::test_manifest_cannot_drift_after_validation"
+      ],
+      "failures_observed": 1,
+      "mutation": "scoring_protocol reverts to a plain mutable dict"
+    },
+    {
+      "detected_by": [
+        "tests/unit/test_campaign_schema.py::test_unknown_item_count_stays_unknown_rather_than_zero"
+      ],
+      "failures_observed": 1,
+      "mutation": "planned_item_count returns 0 for an unknown size"
+    },
+    {
+      "carried_over_from": "G00",
+      "detected_by": [
+        "tests/integration/test_install.py"
+      ],
+      "failures_observed": 8,
+      "mutation": "an unimplemented CLI command returns EXIT_OK"
+    }
+  ],
+  "not_established_by_this_gate": [
+    "No benchmark has been executed and no score exists.",
+    "No generation has been dispatched; `run` still exits 3 pending G04.",
+    "The offline-demo campaign validates but cannot run: no fixture transcripts exist until G03 (T03A).",
+    "No dataset, evaluator or provider has been contacted.",
+    "Live readiness, setup, pilot and full-run gates remain blocked_external."
+  ],
+  "passed": 313,
+  "prerequisite_evidence": [
+    "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json"
+  ],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T01A",
+    "T01B",
+    "T01C"
+  ],
+  "review": {
+    "guards_added_for_defects": [
+      "tests/unit/test_campaign_schema.py::test_manifest_cannot_drift_after_validation",
+      "tests/unit/test_campaign_schema.py::test_credential_ref_allowlist_rejects_unlisted_secret_shapes",
+      "tests/unit/test_campaign_schema.py::test_unknown_item_count_stays_unknown_rather_than_zero",
+      "tests/contract/test_result_schema.py::test_a_pass_with_skips_but_no_passes_is_rejected",
+      "tests/contract/test_result_schema.py::test_a_pass_with_a_nonzero_command_status_is_rejected",
+      "tests/contract/test_result_schema.py::test_a_constructed_task_rechecks_its_prompt_hash_at_dispatch",
+      "tests/contract/test_result_schema.py::test_stop_sequences_are_part_of_the_prompt_identity",
+      "tests/unit/test_cli_shell.py::test_cli_shell_imports_no_third_party_dependency (keeps the CLI shell installable with no dependencies)"
+    ],
+    "noted_not_a_defect": [
+      "Set-valued fields (api_modes, context_lengths, stratify_by) are not order-canonicalized, so two semantically identical profiles can hash differently. Over-sensitivity is safer than under-sensitivity and the plan only requires key-order invariance, which holds. Left as-is deliberately."
+    ],
+    "resolved": [
+      "PromptRef dropped `stop`, so two different dispatchable requests hashed to one identity, and TaskSpec.prompt_artifact_hash was never checked. Fixed: PromptRef.from_request round-trips every field, TaskSpec re-verifies the recorded hash at validation and again in safe_request(), and total_planned_requests/trace_key tests cover it.",
+      "title/description/comparability_rule accepted pasted credentials, and a test asserted the canary SURVIVED. Fixed: free-text fields are rejected on any secret marker, and the test now expects rejection.",
+      "credential_ref used a blocklist, so a JWT or bare hex key passed as a 'name'. Fixed: replaced with an allowlist of environment-variable names (^[A-Z][A-Z0-9_]{0,127}$), blocklist retained only for the error message.",
+      "GateEvidence certified a pass with zero passing tests or with a non-zero recorded command. Fixed: both are now rejected; a pass with real passes plus a skip is still allowed and disclosed.",
+      "FrozenModel claimed to be hashable and immutable but scoring_protocol was a mutable dict, so a validated manifest could drift under an already-recorded hash. Fixed: scoring_protocol is an immutable tuple of pairs that still serializes to a mapping, and the FrozenModel docstring now states exactly what frozen does and does not do.",
+      "planned_item_count returned 0 for an enumeration-only benchmark, silently disabling the request-cap check and surfacing a wrong planned_requests in the CLI. Fixed: it returns None, total_planned_requests returns None when any size is unknown, known_planned_requests gives the lower bound, an unmaterialized unknown size becomes an explicit dispatch blocker, and the CLI reports both."
+    ],
+    "round": 2,
+    "round_1_findings": 6,
+    "round_1_outcome": "FAIL"
+  },
+  "review_decision": "PASS",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py::test_live_suite_requires_explicit_authorization": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+    "tests/live/test_live_authorization.py::test_paid_suite_requires_a_numeric_spending_cap": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006",
+    "kind": "source_tree_sha256",
+    "note": "Includes the G00 revision plus the G01 schema layer; G00 remains valid because its own criteria were re-run unchanged on this tree.",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d' ' -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 164,
+    "tests/integration": 14,
+    "tests/live": 3,
+    "tests/replay": 0,
+    "tests/sandbox": 0,
+    "tests/unit": 134
+  },
+  "task_acceptance": {
+    "T01A": {
+      "evidence": "test_campaign_schema.py covers incompatible versions, duplicate endpoint/benchmark/item IDs, non-finite prices and limits, conflicting limits, and credentials in credential_ref and in free text.",
+      "result": "satisfied"
+    },
+    "T01B": {
+      "evidence": "test_result_schema.py covers nullable usage (absent vs reported zero), retry/attempt collapse via accepted_sample_keys, unresolved attempts, and evaluator-only exclusion from requests.",
+      "result": "satisfied"
+    },
+    "T01C": {
+      "evidence": "test_manifest_hash.py covers key-order invariance at two depths, sequence-order sensitivity, and hash invalidation for seed, generation settings, limits, retry policy, campaign id, score version, materialization, item selection, evaluator revision, dataset revision, capabilities and prices.",
+      "result": "satisfied"
+    }
+  },
+  "vacuous_suites": {
+    "tests/replay": "registered in docs/contracts.md suites_not_yet_started (T02C / G02)",
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07)"
+  }
+}

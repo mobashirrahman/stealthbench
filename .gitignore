@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+
+# StealthBench outputs. Artifacts and reports may contain redacted but still
+# sensitive model responses, so they are never committed.
+artifacts/
+reports/
+evidence-local/

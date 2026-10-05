@@ -1,0 +1,57 @@
+{
+  "campaign": "live-ifeval-space-bunny-free-20261004",
+  "ci_95_strict": "0.47-0.63 (SE 0.041)",
+  "dataset": "google/IFEval rev 966cd895, split train, n=150 of 541 (plus full-541 scores_full)",
+  "disclaimer": "150-of-541 seeded subsample, temperature 0; not comparable to published full-set numbers; infrastructure-grade check, not a global ranking.",
+  "free_model_probe_20261004": {
+    "opencode_console_only_403": [
+      "mimo-v2.6-flash-free",
+      "longcat-2.5-preview-free",
+      "mimo-v2.5-free",
+      "ling-3.0-flash-fin-free",
+      "nemotron-3-ultra-free",
+      "nemotron-3.5-lightning-free",
+      "fledge-alpha-free",
+      "ling-3.1-flash-free"
+    ],
+    "upstream_unavailable_or_500": [
+      "deepseek-v4-flash-free",
+      "jev-1.13-free",
+      "muse-spark-1.3-contributor-free",
+      "muse-spark-1.2-contributor-free"
+    ],
+    "working": [
+      "space-bunny-free"
+    ]
+  },
+  "generation": {
+    "max_tokens": 1024,
+    "one_sample_per_task": true,
+    "system_prompt": null,
+    "temperature": 0.0
+  },
+  "model": "space-bunny-free",
+  "raw_artifacts": "artifacts/live-ifeval-20261004/ (gitignored)",
+  "score_version": "google-research@e49bbfe3 (official evaluation_main.py)",
+  "scores": {
+    "n": 150,
+    "prompt_level_loose_accuracy": 0.56,
+    "prompt_level_strict_accuracy": 0.547,
+    "selection_seed": 20261004
+  },
+  "scores_full": {
+    "n": 541,
+    "note": "entire official google/IFEval train split (541 prompts); same generation protocol as n=150 run",
+    "prompt_level_loose_accuracy": 0.584,
+    "prompt_level_strict_accuracy": 0.573
+  },
+  "selection": "sha256(seed:key) rank-order, seed 20261004, 150 items",
+  "transport": {
+    "distinct_cost_values": [
+      "0"
+    ],
+    "failed": 0,
+    "ok": 150,
+    "requested": 150
+  }
+}

@@ -1,0 +1,35 @@
+# Fully pinned dev/test environment for StealthBench (gate G00 dependency lock).
+# Regenerate: .venv/bin/pip install -c constraints-dev.txt -e '.[dev]' && .venv/bin/pip freeze --exclude-editable
+# Install with: pip install -c constraints-dev.txt -e '.[dev]'
+#
+# Direct dependencies are pinned with == in pyproject.toml. This file pins the
+# full transitive closure so an offline suite cannot drift with an upstream release.
+#
+annotated-types==0.8.0
+anyio==4.15.1
+attrs==26.1.0
+certifi==2026.7.22
+coverage==7.16.2
+editables==0.5
+h11==0.16.0
+hatchling==1.28.0
+httpcore==1.0.9
+httpx==0.28.1
+hypothesis==6.142.1
+idna==3.20
+iniconfig==2.3.0
+mypy==1.18.2
+mypy_extensions==1.1.0
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.6.0
+pydantic==2.12.5
+pydantic_core==2.41.5
+Pygments==2.21.0
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.15.1
+sortedcontainers==2.4.0
+trove-classifiers==2026.9.21.13
+typing-inspection==0.4.4
+typing_extensions==4.16.0

@@ -1,0 +1,313 @@
+{
+  "artifacts": [
+    "src/stealthbench/adapters/base.py",
+    "src/stealthbench/adapters/zen.py",
+    "src/stealthbench/adapters/streaming.py"
+  ],
+  "collected": 618,
+  "commands": [
+    {
+      "command": "ruff check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "lint",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": "ruff format --check .",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "format",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "41 files already formatted"
+      ]
+    },
+    {
+      "command": "mypy src/stealthbench",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "typecheck",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 15 source files"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "unit_contract",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "..........................................................               [100%]",
+        "490 passed in 10.26s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/integration tests/replay -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "integration_replay",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        ".....................................................                    [100%]",
+        "125 passed in 7.84s"
+      ]
+    },
+    {
+      "command": "pytest --strict-markers tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live -q",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "full_offline_collection",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "SKIPPED [2] tests/live/test_live_authorization.py:30: blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+        "616 passed, 2 skipped in 16.92s"
+      ]
+    },
+    {
+      "command": "stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "expectation": "exit 0",
+      "name": "cli_validate",
+      "satisfied": true,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": "stealthbench bogus-command",
+      "exit_status": 2,
+      "expectation": "non-zero exit",
+      "name": "cli_invalid_command",
+      "satisfied": true,
+      "stderr_tail": [
+        "usage: stealthbench [-h] [--version] <command> ...",
+        "stealthbench: error: argument <command>: invalid choice: 'bogus-command' (choose from 'version', 'manifest', 'run', 'replay', 'report', 'signatures', 'identify', 'doctor')"
+      ],
+      "stdout_tail": []
+    },
+    {
+      "command": "stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "expectation": "non-zero exit",
+      "name": "cli_run_pending",
+      "satisfied": true,
+      "stderr_tail": [
+        "{\"command\": \"run\", \"gate\": \"G04\", \"status\": \"not_implemented\"}"
+      ],
+      "stdout_tail": []
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/replay",
+    "tests/live"
+  ],
+  "defects_found_before_review": [
+    "A failure *detail* string leaked a credential while the structured body was redacted. Redaction was centralised into safe_failure() so an adapter cannot redact one and forget the other; both the fixture and Zen adapters use it.",
+    "The SSE byte decoder only emitted decoded text when a partial character remained, which is almost never, so most streams parsed as empty. Found by the streaming tests before any gate check.",
+    "The SSE parser kept consuming records after the [DONE] sentinel when the sentinel and later records arrived in one read.",
+    "The fixture transport's unsupported-setting report read the request after it had been deleted from scope."
+  ],
+  "depends_on_gates": [
+    "G02"
+  ],
+  "environment": {
+    "dependency_lock": "constraints-dev.txt",
+    "network": "none used; the adapter layer imports no http/requests/socket/urllib, asserted by AST inspection",
+    "platform": "linux",
+    "python": "3.12.3",
+    "tool_versions": {
+      "httpx": "0.28.1",
+      "mypy": "1.18.2",
+      "pydantic": "2.12.5",
+      "pytest": "9.1.1",
+      "ruff": "0.15.1"
+    },
+    "venv": ".venv"
+  },
+  "exit_statuses": {
+    "cli_invalid_command": 2,
+    "cli_run_pending": 3,
+    "cli_validate": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_criteria": [
+    {
+      "criterion": "adapter output matches the result contract",
+      "evidence": "Every adapter outcome is re-validated against GenerationResult from its own serialized form in tests/contract/test_g03_gate.py, parametrized over the fixture and Zen adapters. A failure yields no result rather than an accepted empty one; an adapter result can contribute at most one accepted sample.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "chunks are not counted as tokens",
+      "evidence": "test_no_adapter_derives_tokens_from_chunks streams 200 chunks and asserts the only token count is the 2 the endpoint reported. StreamAssembly.token_rate() returns None unless a reported output-token count and a measured duration are both present; there is no chunk-to-token helper anywhere in the module. Substituting chunk_count for a missing token count is mutation-detected.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "error bodies are redacted",
+      "evidence": "safe_failure() redacts both the detail string and the structured body. Tests assert a canary is absent from the detail, from failure.to_dict() and from the whole outcome for both adapters, and that a known credential header name is redacted while ordinary headers stay readable.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "unsupported parameters are reported",
+      "evidence": "An unsupported setting is reported with the value that was requested and a reason, never dropped. The base stream() refuses outright rather than returning a non-streamed result labelled as streamed, so no timing measurement can be fabricated. Mutating the catalog to invent streaming support is mutation-detected.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "production adapter behavior is demonstrated against fixture protocol transcripts",
+      "evidence": "ZenAdapter is driven by a recorded transcript loaded from disk (ZenAdapter.from_path) and runs its real normalisation: catalog snapshotting, usage extraction under three key conventions, finish-reason mapping, tool-call extraction and error mapping. The same code path serves a live capture, so the offline suite exercises production behaviour rather than a double.",
+      "result": "satisfied"
+    }
+  ],
+  "gate_id": "G03",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 125,
+      "failed": 0,
+      "passed": 125,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 490,
+      "failed": 0,
+      "passed": 490,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no live catalog capture, no container runtime probed",
+  "mutation_checks": [
+    {
+      "detected_by": [
+        "tests/contract/test_streaming.py"
+      ],
+      "failures_observed": 4,
+      "mutation": "the SSE byte decoder stops emitting decoded text"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_streaming.py::test_content_after_the_sentinel_is_ignored"
+      ],
+      "failures_observed": 1,
+      "mutation": "the SSE parser keeps reading records after [DONE]"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_streaming.py"
+      ],
+      "failures_observed": 1,
+      "mutation": "chunk_count substituted for a missing output-token count"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_zen_adapter.py::test_capabilities_are_never_inferred_from_absence"
+      ],
+      "failures_observed": 1,
+      "mutation": "catalog reports streaming=true for every entry"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_zen_adapter.py"
+      ],
+      "failures_observed": 2,
+      "mutation": "an unrecognised finish reason maps to stop"
+    },
+    {
+      "detected_by": [
+        "tests/unit",
+        "tests/contract"
+      ],
+      "failures_observed": 1,
+      "mutation": "an unreported usage is turned into reported zeros"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_provider_contract.py",
+        "tests/contract/test_g03_gate.py"
+      ],
+      "failures_observed": 3,
+      "mutation": "failure detail no longer redacted"
+    },
+    {
+      "detected_by": [
+        "tests/contract/test_streaming.py"
+      ],
+      "failures_observed": 2,
+      "mutation": "a stream without its terminating sentinel is accepted as complete"
+    }
+  ],
+  "not_established_by_this_gate": [
+    "No live request has been sent. The Zen adapter is proven against a recorded transcript, not against the live endpoint; a first live capture belongs to G14 and is blocked_external.",
+    "No catalog has been fetched, so the current alias set is unknown. No alias is hardcoded in the adapter by design.",
+    "The transport abstraction has one implementation (fixture) plus a transcript-driven Zen adapter. A real HTTP transport lands in G04, where authorization and spending caps exist.",
+    "No benchmark grader has been wrapped yet (G05); the adapter layer returns raw responses only.",
+    "Live readiness, setup, pilot and full-run gates remain blocked_external."
+  ],
+  "passed": 616,
+  "prerequisite_evidence": [
+    "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json"
+  ],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T03A",
+    "T03B",
+    "T03C"
+  ],
+  "review_decision": "PENDING",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py::test_live_suite_requires_explicit_authorization": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1",
+    "tests/live/test_live_authorization.py::test_paid_suite_requires_a_numeric_spending_cap": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "f7cc19aa33e54e3eabbf65ff9a6b8c72a358f8f6bdc3e40744aa3ed2a589938b",
+    "kind": "source_tree_sha256",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d' ' -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 356,
+    "tests/integration": 98,
+    "tests/live": 3,
+    "tests/replay": 27,
+    "tests/sandbox": 0,
+    "tests/unit": 134
+  },
+  "task_acceptance": {
+    "T03A": {
+      "evidence": "tests/contract/test_provider_contract.py (47 tests) covers a normal response, all eight failure kinds with their retryable classification, absent usage, partially reported usage, reported zero usage, unsupported settings, streaming refusal, catalog normalisation and bundle validation.",
+      "result": "satisfied"
+    },
+    "T03B": {
+      "evidence": "tests/contract/test_zen_adapter.py (63 tests) covers normal/empty/malformed catalogs, authentication and permission and 404 and 429 and 5xx and timeout failures, usage absence in three key conventions, tool responses, finish-reason mapping including an unrecognised reason, and an explicit test that no stealth alias is hardcoded in the adapter source.",
+      "result": "satisfied"
+    },
+    "T03C": {
+      "evidence": "tests/contract/test_streaming.py (43 tests) covers records split across reads, several records in one read, byte-at-a-time delivery, multi-byte characters split across a read boundary including an emoji and a surrogate-escaped payload, reasoning-only chunks, usage-only terminal chunks, finish chunks, stream interruption, an unparsable record mid-stream, and chunk-count isolation from token counts.",
+      "result": "satisfied"
+    }
+  },
+  "vacuous_suites": {
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07)"
+  }
+}

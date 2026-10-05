@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StealthBench — space-bunny-free live results</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.6rem; margin-bottom: 0; }
+  .sub { color: #666; margin-top: .2rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #9993; padding: .4rem .6rem; text-align: left; font-size: .92rem; }
+  th { background: #8882; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  figure { margin: 1.5rem 0 0.5rem; }
+  figcaption { font-weight: 600; margin-bottom: .3rem; }
+  .bar { fill: #2f81f7; }
+  .bar.ours { fill: #1f6feb; }
+  .bar.frontier { fill: #6e7681; }
+  .bar.budget { fill: #a371f7; }
+  text { font-size: 12px; }
+  .ci { stroke: #111; stroke-width: 1.5; }
+  footer { margin-top: 2rem; font-size: .85rem; color: #666; }
+  code { font-size: .85em; }
+</style>
+</head>
+<body>
+<h1>StealthBench live results: <code>space-bunny-free</code></h1>
+<p class="sub">Anonymous OpenCode Zen alias &middot; keyless $0 free tier &middot; measured 2026-10-04/05 &middot; <a href="https://github.com/mobashirrahman/stealthbench">repo</a></p>
+
+<h2>Scoreboard</h2>
+<table>
+<tr><th>Benchmark</th><th>Score</th><th>n</th><th>95% CI</th><th>Cost</th></tr>
+<tr><td>IFEval strict / loose (official scorer)</td><td class="num">0.573 / 0.584</td><td class="num">541 (full set)</td><td class="num">&plusmn;0.04</td><td class="num">$0</td></tr>
+<tr><td>MATH-500 (exact&rarr;numeric protocol)</td><td class="num">0.610</td><td class="num">500 (full split)</td><td class="num">&plusmn;0.04</td><td class="num">$0</td></tr>
+<tr><td>MMLU-Pro (letter-only extraction)</td><td class="num">0.712</td><td class="num">500 stratified</td><td class="num">&plusmn;0.04</td><td class="num">$0</td></tr>
+<tr><td>BFCL prompted slice</td><td class="num">30/50 eligible, overall null*</td><td class="num">50</td><td class="num;">&mdash;</td><td class="num">$0</td></tr>
+</table>
+<p>*Partial 6/16-category slice: reported per-category, never zero-filled. Transport 100% on every run.</p>
+
+<figure>
+<figcaption>Headline scores with 95% CI</figcaption>
+<svg width="640" height="150" role="img" aria-label="headline scores">
+  <text x="0" y="25">IFEval strict 0.573</text><rect class="bar ours" x="190" y="10" width="229" height="18"/><line class="ci" x1="212" y1="10" x2="212" y2="28"/><line class="ci" x1="246" y1="10" x2="246" y2="28"/>
+  <text x="0" y="55">MATH-500 0.610</text><rect class="bar ours" x="190" y="40" width="244" height="18"/><line class="ci" x1="227" y1="40" x2="227" y2="58"/><line class="ci" x1="261" y1="40" x2="261" y2="58"/>
+  <text x="0" y="85">MMLU-Pro 0.712</text><rect class="bar ours" x="190" y="70" width="285" height="18"/><line class="ci" x1="269" y1="70" x2="269" y2="88"/><line class="ci" x1="301" y1="70" x2="301" y2="88"/>
+  <text x="190" y="115">0</text><text x="570" y="115">1.0</text>
+</svg>
+</figure>
+
+<figure>
+<figcaption>vs frontier and budget references (published full-set numbers)</figcaption>
+<svg width="640" height="250" role="img" aria-label="frontier comparison">
+  <text x="0" y="20">IFEval: us 0.57</text><rect class="bar ours" x="230" y="5" width="229" height="16"/>
+  <text x="0" y="40">GPT-5 nano 0.93</text><rect class="bar budget" x="230" y="25" width="373" height="16"/>
+  <text x="0" y="60">GPT-5.4 Pro 0.97</text><rect class="bar frontier" x="230" y="45" width="388" height="16"/>
+  <text x="0" y="95">MMLU-Pro: us 0.71</text><rect class="bar ours" x="230" y="80" width="285" height="16"/>
+  <text x="0" y="115">DeepSeek V4 Flash 0.85</text><rect class="bar budget" x="230" y="100" width="341" height="16"/>
+  <text x="0" y="135">Claude Fable 5.1 0.92</text><rect class="bar frontier" x="230" y="120" width="370" height="16"/>
+  <text x="0" y="170">MATH-500: us 0.61</text><rect class="bar ours" x="230" y="155" width="244" height="16"/>
+  <text x="0" y="190">DeepSeek V3 0.89</text><rect class="bar budget" x="230" y="175" width="354" height="16"/>
+  <text x="0" y="210">GPT-5 0.99</text><rect class="bar frontier" x="230" y="195" width="398" height="16"/>
+  <text x="0" y="240" fill="#666">blue = space-bunny-free (our subsample/zero-shot runs) &middot; purple = budget refs &middot; gray = frontier (full-set, usually few-shot)</text>
+</svg>
+</figure>
+
+<figure>
+<figcaption>MMLU-Pro by category (n=32&ndash;36 each)</figcaption>
+<svg width="640" height="330" role="img" aria-label="mmlu by category">
+  <text x="0" y="20">math 0.89</text><rect class="bar" x="150" y="5" width="356" height="16"/>
+  <text x="0" y="42">biology 0.86</text><rect class="bar" x="150" y="27" width="344" height="16"/>
+  <text x="0" y="64">chemistry 0.81</text><rect class="bar" x="150" y="49" width="324" height="16"/>
+  <text x="0" y="86">physics 0.81</text><rect class="bar" x="150" y="71" width="324" height="16"/>
+  <text x="0" y="108">business 0.78</text><rect class="bar" x="150" y="93" width="312" height="16"/>
+  <text x="0" y="130">comp-sci 0.78</text><rect class="bar" x="150" y="115" width="312" height="16"/>
+  <text x="0" y="152">psychology 0.75</text><rect class="bar" x="150" y="137" width="300" height="16"/>
+  <text x="0" y="174">health 0.69</text><rect class="bar" x="150" y="159" width="276" height="16"/>
+  <text x="0" y="196">philosophy 0.69</text><rect class="bar" x="150" y="181" width="276" height="16"/>
+  <text x="0" y="218">economics 0.64</text><rect class="bar" x="150" y="203" width="256" height="16"/>
+  <text x="0" y="240">engineering 0.64</text><rect class="bar" x="150" y="225" width="256" height="16"/>
+  <text x="0" y="262">history 0.62</text><rect class="bar" x="150" y="247" width="248" height="16"/>
+  <text x="0" y="284">other 0.61</text><rect class="bar" x="150" y="269" width="244" height="16"/>
+  <text x="0" y="306">law 0.39</text><rect class="bar" x="150" y="291" width="156" height="16"/>
+</svg>
+</figure>
+
+<figure>
+<figcaption>BFCL prompted slice by category (n=8&ndash;9 each)</figcaption>
+<svg width="640" height="160" role="img" aria-label="bfcl by category">
+  <text x="0" y="20">parallel 0.88</text><rect class="bar" x="170" y="5" width="350" height="16"/>
+  <text x="0" y="42">simple_java 0.75</text><rect class="bar" x="170" y="27" width="300" height="16"/>
+  <text x="0" y="64">irrelevance 0.62</text><rect class="bar" x="170" y="49" width="250" height="16"/>
+  <text x="0" y="86">simple_js 0.50</text><rect class="bar" x="170" y="71" width="200" height="16"/>
+  <text x="0" y="108">multiple 0.44</text><rect class="bar" x="170" y="93" width="178" height="16"/>
+  <text x="0" y="130">simple_py 0.44</text><rect class="bar" x="170" y="115" width="178" height="16"/>
+</svg>
+</figure>
+
+<h2>How it was measured</h2>
+<ul>
+<li>Direct calls to the Zen chat API, temperature 0, bare user prompts, one sample per task, retries on 429/5xx only.</li>
+<li>IFEval graded by the pinned official scorer; MMLU-Pro/MATH-500 by frozen repo adapters (letter extraction, exact&rarr;numeric equivalence, no sympy).</li>
+<li>Pinned data revisions; seeded selections; transport failures kept missing, never zero.</li>
+</ul>
+
+<h2>Caveats</h2>
+<ul>
+<li>MMLU-Pro/MATH-500 are subsamples with zero-shot prompts; published numbers use full sets and usually few-shot CoT. Directional only.</li>
+<li>MMLU-Pro needs a 1024-token budget on this alias (reasoning lives in traces); at 64 tokens it scored 0.36.</li>
+<li>Alias identity unresolved: similarity evidence only, never a probability.</li>
+<li>Code-execution benchmarks skipped: no container runtime on the host.</li>
+</ul>
+
+<footer>
+Evidence: <a href="https://github.com/mobashirrahman/stealthbench/tree/main/implementation/evidence">implementation/evidence</a> &middot;
+Report source: <a href="https://github.com/mobashirrahman/stealthbench/blob/main/docs/RESULTS-space-bunny-free.md">docs/RESULTS-space-bunny-free.md</a>
+</footer>
+</body>
+</html>

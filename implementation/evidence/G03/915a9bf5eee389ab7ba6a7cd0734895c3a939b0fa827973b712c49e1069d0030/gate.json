@@ -1,0 +1,394 @@
+{
+  "artifacts": [
+    "src/stealthbench/adapters/base.py",
+    "src/stealthbench/adapters/zen.py",
+    "src/stealthbench/adapters/streaming.py",
+    "tests/fixtures/zen/chat.completions.json",
+    "tests/fixtures/zen/chat.completions.stream.sse",
+    "tests/fixtures/zen/chat.completions.truncated.sse",
+    "tests/fixtures/zen/chat.completions.server_error.sse"
+  ],
+  "collected": 781,
+  "commands": [
+    {
+      "command": ".venv/bin/ruff check .",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "All checks passed!"
+      ]
+    },
+    {
+      "command": ".venv/bin/ruff format --check .",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "43 files already formatted"
+      ]
+    },
+    {
+      "command": ".venv/bin/mypy src/stealthbench",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "Success: no issues found in 15 source files"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 653,
+      "_skipped": 0,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/unit tests/contract",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "653 passed in 15.66s"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 125,
+      "_skipped": 0,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/integration tests/replay",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "125 passed in 12.19s"
+      ]
+    },
+    {
+      "_failed": 0,
+      "_passed": 779,
+      "_skipped": 2,
+      "command": ".venv/bin/python -m pytest --strict-markers -q tests/unit tests/contract tests/integration tests/replay tests/sandbox tests/live",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "779 passed, 2 skipped in 27.54s"
+      ]
+    },
+    {
+      "command": ".venv/bin/stealthbench manifest validate configs/offline-demo.json",
+      "exit_status": 0,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "  \"planned_requests\": 3,",
+        "  \"status\": \"valid\"",
+        "}"
+      ]
+    },
+    {
+      "command": ".venv/bin/stealthbench run configs/offline-demo.json",
+      "exit_status": 3,
+      "stderr_tail": [],
+      "stdout_tail": [
+        "{\"command\": \"run\", \"gate\": \"G04\", \"status\": \"not_implemented\"}"
+      ]
+    }
+  ],
+  "counted_suites": [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+    "tests/replay",
+    "tests/live"
+  ],
+  "depends_on_gates": [
+    "G00",
+    "G01",
+    "G02"
+  ],
+  "environment": {
+    "dependency_lock": "constraints-dev.txt",
+    "evidence_builder": "implementation/mutation/build_g03_evidence.py",
+    "mutation_harness": "implementation/mutation/g03_verify.py",
+    "platform": "linux",
+    "python": "3.12.3",
+    "venv": ".venv"
+  },
+  "exit_statuses": {
+    "cli_run": 3,
+    "cli_validate": 0,
+    "format": 0,
+    "full_offline_collection": 0,
+    "integration_replay": 0,
+    "lint": 0,
+    "typecheck": 0,
+    "unit_contract": 0
+  },
+  "failed": 0,
+  "gate_criteria": [
+    {
+      "criterion": "adapter output matches the result contract",
+      "evidence": "tests/contract/test_g03_gate.py validates every adapter result against the frozen GenerationResult contract, requires exactly one of result or failure, asserts an unknown alias yields a failure rather than an invented result, and asserts a whitespace-only answer is delivered rather than converted into an endpoint error.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "chunks are not counted as tokens",
+      "evidence": "A 202-chunk stream reports chunk_count 202 and output_tokens 2, the value the endpoint reported; token_rate divides by a measured duration and never by the chunk count, and returns None when either the count or the duration is absent.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "error bodies are redacted",
+      "evidence": "Redaction is centralised in safe_failure and redact_mapping and is forwarded down every path, including the streaming parser, where it was previously dropped entirely. Tests assert a credential is absent from the detail string, the failure body and the whole serialized outcome for both adapters, for mid-stream error frames, and for five recognised credential header names. Two canaries are used: a credential-shaped one the built-in patterns defuse, and a pattern-blind one that only an explicitly declared secret can remove, so the declared-secrets wiring is proven on its own. A control test asserts the pattern-blind value survives when it is not declared.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "unsupported parameters are reported",
+      "evidence": "check_requested_settings names a setting the endpoint does not advertise and returns nothing for a fully capable endpoint; the empty result is itself the assertion. The captured transcript is also read for settings the gateway declined, on both the complete and the streamed path, which previously reported nothing at all.",
+      "result": "satisfied"
+    },
+    {
+      "criterion": "production adapter behaviour is demonstrated against fixture protocol transcripts",
+      "evidence": "tests/fixtures/zen/ holds a committed wire capture: chat.completions.json with four recorded requests (GET /v1/models 200, POST 200, POST 401, POST 429 with retry-after 3) and endpoint-qualified exchanges, plus four byte-level SSE captures framed with real CRLF: a complete stream, a truncated stream whose final content and finish_reason share one record, a mid-stream server error with no [DONE], and a cut connection with no sentinel at all. The catalog is read from the recorded GET /models response body. Every capture is asserted CRLF-framed with no bare-LF framing, and the cut capture is asserted to lack the sentinel and to be refused.",
+      "result": "satisfied"
+    }
+  ],
+  "gate_id": "G03",
+  "gate_suite_totals": {
+    "integration_replay": {
+      "collected": 125,
+      "failed": 0,
+      "passed": 125,
+      "skipped": 0
+    },
+    "unit_contract": {
+      "collected": 653,
+      "failed": 0,
+      "passed": 653,
+      "skipped": 0
+    }
+  },
+  "live_readiness": "blocked_external: no credentials, no spending authorization, no container runtime probed",
+  "mutation_checks": [
+    {
+      "defect": "1: terminal finish_reason dropped when content shares the record",
+      "detected": true,
+      "mutation": "M1"
+    },
+    {
+      "defect": "2: CRLF/CR framing loses all content",
+      "detected": true,
+      "mutation": "M2"
+    },
+    {
+      "defect": "3: a string/number capability becomes True",
+      "detected": true,
+      "mutation": "M3"
+    },
+    {
+      "defect": "4: junk token usage coerced instead of absent",
+      "detected": true,
+      "mutation": "M4"
+    },
+    {
+      "defect": "5a: Zen effective settings skip redaction entirely",
+      "detected": true,
+      "mutation": "M5"
+    },
+    {
+      "defect": "5b: the fixture adapter's effective settings skip redaction",
+      "detected": true,
+      "mutation": "M5b"
+    },
+    {
+      "defect": "5c: a fixture tool-call argument skips redaction",
+      "detected": true,
+      "mutation": "M5c"
+    },
+    {
+      "defect": "5d: Zen provider metadata skips redaction",
+      "detected": true,
+      "mutation": "M5d"
+    },
+    {
+      "defect": "6: streamed results carry no route label",
+      "detected": true,
+      "mutation": "M6"
+    },
+    {
+      "defect": "8: the generic repeat record shadows a repeat-specific one",
+      "detected": true,
+      "mutation": "M7"
+    },
+    {
+      "defect": "new: mid-stream error frame silently becomes an interruption",
+      "detected": true,
+      "mutation": "M8"
+    },
+    {
+      "defect": "review-1 CRITICAL: the fixture path synthesises data: [DONE] again",
+      "detected": true,
+      "mutation": "M10"
+    },
+    {
+      "defect": "review-1 CRITICAL: the Zen path synthesises data: [DONE] again",
+      "detected": true,
+      "mutation": "M11"
+    },
+    {
+      "defect": "review-2 MAJOR: declared secrets are not forwarded to the streaming parser",
+      "detected": true,
+      "mutation": "M12"
+    },
+    {
+      "defect": "review-3 MAJOR: an absent finish reason is reported as a clean stop",
+      "detected": true,
+      "mutation": "M13"
+    },
+    {
+      "defect": "review-4 MAJOR: an eagerly converted trailing CR fabricates a record boundary",
+      "detected": true,
+      "mutation": "M14"
+    },
+    {
+      "defect": "review-5: usage on the terminal record is dropped again",
+      "detected": true,
+      "mutation": "M15"
+    },
+    {
+      "defect": "review-6: a content-parts delta is dropped again",
+      "detected": true,
+      "mutation": "M16"
+    },
+    {
+      "defect": "review-7: recorded unsupported settings are ignored when streaming",
+      "detected": true,
+      "mutation": "M17"
+    },
+    {
+      "defect": "review-8: a malformed catalog raises out of discover(",
+      "detected": true,
+      "mutation": "M18"
+    },
+    {
+      "defect": "review-9: a fabricated offset is paired with a measured total again",
+      "detected": true,
+      "mutation": "M19"
+    },
+    {
+      "defect": "review-10: an unqualified transcript key is matched however many aliases exist",
+      "detected": true,
+      "mutation": "M20"
+    },
+    {
+      "defect": "review-11: a corrupt byte stalls the rest of the stream again",
+      "detected": true,
+      "mutation": "M21"
+    },
+    {
+      "defect": "review-12: a /models path with a query string is not recognised",
+      "detected": true,
+      "mutation": "M22"
+    },
+    {
+      "defect": "review-13: a boolean context window is recorded as a measurement",
+      "detected": true,
+      "mutation": "M23"
+    },
+    {
+      "defect": "review-14: an explicit null route becomes the string 'None'",
+      "detected": true,
+      "mutation": "M24"
+    },
+    {
+      "defect": "review-15: the two catalog digests diverge again",
+      "detected": true,
+      "mutation": "M25"
+    },
+    {
+      "defect": "new: the catalog is not read from the recorded GET /models response",
+      "detected": true,
+      "mutation": "M9"
+    }
+  ],
+  "mutation_note": "Every mutation was applied to the working tree, the named suites were run, the expected failure was observed, and the source was restored; a final restore check runs the contract suite. A mutation whose anchor no longer matches the source is reported as SKIP rather than counted as a pass, so a stale harness cannot inflate this list.",
+  "not_established_by_this_gate": [
+    "No generation has been dispatched; `run` still exits 3 pending G04.",
+    "No benchmark adapter exists yet; G05 onward.",
+    "No dataset, evaluator or provider has been contacted.",
+    "Live readiness, setup, pilot and full-run gates remain blocked_external."
+  ],
+  "passed": 779,
+  "passed_gate": true,
+  "prerequisite_evidence": [
+    "implementation/evidence/G00/3491f1f114880f14db8979c82bd57a8c2c3814cd9f1e70bd46f4f1bbcd043594/gate.json",
+    "implementation/evidence/G01/790d70f64a12e87b4d26d123c78c794c8e99816d897122616451d2f00281f006/gate.json",
+    "implementation/evidence/G02/4079454a4cbd7149531c197dc3b171ec8401cc995d75498444c0261993eefd35/gate.json"
+  ],
+  "recorded_on": "2026-10-02",
+  "required_tasks": [
+    "T03A",
+    "T03B",
+    "T03C"
+  ],
+  "review": {
+    "decision_source": "two independent reviews of G03, each followed by remediation and re-measurement",
+    "defects_fixed": {
+      "round_1": 9,
+      "round_2": 16
+    },
+    "defects_found_while_remediating": [
+      "The redaction tests used an sk- shaped canary, which the built-in credential patterns defuse whether or not declared secrets are forwarded, so they could not detect the declared-secrets wiring being removed. A pattern-blind canary plus a control test now prove that path on its own.",
+      "A helper introduced to distinguish a truncated character from a corrupt byte could not change any observable outcome, so it was removed rather than kept as unverified code.",
+      "Two of my own regressions were caught by the suite: an eager CR conversion, and an over-narrow truncation test that hid a decode change."
+    ],
+    "defects_reported": {
+      "round_1": 9,
+      "round_2": 16
+    },
+    "review_rounds": 2,
+    "round_2_most_serious": [
+      "CRITICAL: both stream paths appended a synthetic data: [DONE], so a capture from a connection that died replayed as a complete accepted sample. RecordedExchange now carries stream_terminated and the sentinel is only synthesised when the capture had one.",
+      "MAJOR: extra_secrets was not forwarded to the streaming parser on either adapter, so a declared secret survived in a streamed failure detail.",
+      "MAJOR: map_finish_reason(None) returned 'stop', so a truncated generation became a counted success. An absent reason now stays absent; a test that asserted None -> 'stop' was corrected.",
+      "MAJOR: a CR at the end of one read followed by an LF at the start of the next manufactured a blank line the wire never sent, cutting a multi-line record in half.",
+      "MODERATE: usage reported on a terminal record was discarded, and usage split across frames lost the first half.",
+      "MODERATE: a content-parts delta was dropped while the non-streamed path read it.",
+      "MODERATE: recorded unsupported settings were ignored on both streamed paths.",
+      "MODERATE: discover() raised TypeError on a non-list catalog.",
+      "MODERATE: an event index paired with a measured total could exceed it and raise ValidationError out of the adapters; per-event offsets are now only recorded from measured pacing.",
+      "MODERATE: an endpoint-unqualified transcript key replayed one capture as a sample for every endpoint in the campaign.",
+      "MODERATE: one undecodable byte held back every later byte of the stream.",
+      "MINOR: a /models path with a query string was not recognised; True was accepted as a context window; an explicit null route became the string 'None'; the two catalog digests could never agree; and dead code was removed."
+    ]
+  },
+  "review_decision": "PENDING",
+  "schema_version": "1.0",
+  "skip_reasons": {
+    "tests/live/test_live_authorization.py": "blocked_external: STEALTHBENCH_LIVE_AUTHORIZATION is not set to 1"
+  },
+  "skipped": 2,
+  "source_revision": {
+    "digest": "915a9bf5eee389ab7ba6a7cd0734895c3a939b0fa827973b712c49e1069d0030",
+    "kind": "source_tree_sha256",
+    "recompute_command": "find . -type f \\( -name '*.py' -o -name '*.toml' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name 'py.typed' -o -name 'constraints-dev.txt' \\) -not -path './.venv/*' -not -path '*/__pycache__/*' -not -path './implementation/evidence/*' -not -path './implementation/tasks.json' | sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum \"$f\" | cut -d' ' -f1)\" \"${f#./}\"; done | sha256sum | cut -d\" \" -f1"
+  },
+  "suite_counts": {
+    "tests/contract": 519,
+    "tests/integration": 98,
+    "tests/live": 3,
+    "tests/replay": 27,
+    "tests/sandbox": 0,
+    "tests/unit": 134
+  },
+  "supersede_reason": "The withdrawn record recorded review_decision PENDING; the independent review of G03 returned FAIL twice. The first pass found 9 defects (a terminal finish_reason dropped when the last content shared the record; SSE framing recognising only bare LF so a CRLF capture lost all content; catalog capability strings becoming True through bool(); junk token counts coerced or raised; credentials surviving in fixture tool calls, effective settings, CatalogEntry.raw and the snapshot raw; streamed results with no route label and no adapter able to stream; three tests asserting nothing; a repeat-specific record shadowed by the generic one; and a finish-reason test driving a shape no gateway sends). Re-review after remediation found 16 further defects, one critical: both adapters appended a synthetic data: [DONE], so a capture from a connection that died replayed as a complete accepted sample. Both review rounds are fixed with dedicated regression tests; every mutation below was applied and observed to fail the suite, then restored.",
+  "supersedes": "implementation/evidence/G03/f7cc19aa33e54e3eabbf65ff9a6b8c72a358f8f6bdc3e40744aa3ed2a589938b/gate.json",
+  "task_acceptance": {
+    "T03A": {
+      "evidence": "tests/contract/test_provider_contract.py covers the fixture transport: an empty bundle, a missing exchange, a schema-version rejection, every FailureKind the plan names, retryable versus terminal classification, catalog normalisation that never invents a capability, a malformed catalog reported as empty rather than raised, a boolean context window refused as a measurement, a null route label falling back, and a digest that agrees with catalog_snapshot_digest.",
+      "result": "satisfied"
+    },
+    "T03B": {
+      "evidence": "tests/contract/test_zen_adapter.py covers the Zen adapter over a recorded transcript: catalog normalisation, chat and tool-call extraction, HTTP status to failure mapping, effective settings recorded separately from requested ones, a repeat-specific record winning over the generic one, an endpoint-unqualified record refused when several aliases are in the catalog, and a /models request recognised through its query string.",
+      "result": "satisfied"
+    },
+    "T03C": {
+      "evidence": "tests/contract/test_streaming.py covers SSE: every read boundary of a CRLF capture, CRLF, bare LF and bare CR framing, a truncated multi-byte character, a corrupt byte that must not stall the stream, reasoning deltas, usage on a trailing or terminal record and split across frames, a terminal finish_reason sharing the last content record, a content-parts delta, a mid-stream error frame reported as a protocol failure, a capture without the sentinel refused, distinct route labels for identical bytes, and both adapters refusing to fake a stream.",
+      "result": "satisfied"
+    }
+  },
+  "vacuous_suites": {
+    "tests/sandbox": "registered in docs/contracts.md suites_not_yet_started (T07A / G07)"
+  }
+}
